@@ -21,11 +21,13 @@ Data: 2026-11-21 — Windows 11 Pro 26200, headset Razer Kraken 7.1 Chroma (USB 
 2. **Pipeline**: app → endpoint virtual "Alto-falantes (Razer Surround Audio Controller)" → serviço captura via Kernel Streaming (pins KS + IOCTL, PortAudio) → NahimicVHT2 → escreve no Kraken também via KS, fora do mixer do Windows.
    Isso provoca disputa pelo Kraken quando um app abre o headset diretamente.
 3. **Endpoint virtual oculto**: DeviceState `0x10000001` (ativo + oculto) — por isso não aparece no painel de som.
-4. **Causa do "ficar trocando o driver" no Discord**: em
-   `HKCU\Software\Microsoft\Internet Explorer\LowRegistry\Audio\PolicyConfig\PropertyStore`
-   existem ~30 regras de saída por aplicativo, uma por versão do Discord (`app-1.0.9255` … `app-1.0.9269`, incluindo `DiscordHookHelper*.exe`).
-   Quase todas apontam direto para o Kraken (`usb#vid_1532&pid_0504`), apenas a 9255 apontava para o Surround (`root#media`).
-   A cada atualização o Discord ganha um caminho novo e cai fora do Surround.
+4. **Histórico de sessões por app** em
+   `HKCU\Software\Microsoft\Internet Explorer\LowRegistry\Audio\PolicyConfig\PropertyStore`:
+   as entradas só têm o valor padrão `{2}.<endpoint>|<exe>%b{GUID}` — são registros de "este app tocou neste dispositivo", **não** regras forçadas
+   (correção de uma leitura anterior). Mesmo assim mostram o padrão do problema: em praticamente todos os apps (jogos, navegadores, Discord, Telegram…)
+   a maioria das sessões foi aberta direto no Kraken (`usb#vid_1532&pid_0504`) e só raras no Surround (`root#media`).
+   Ou seja, o problema é geral: o Surround falha em manter o dispositivo virtual como destino padrão, e os apps acabam no Kraken cru.
+   (Em 2026-11-21 as 56 entradas do Discord foram removidas; backup em `dumps/`, fora do git.)
 5. Log do serviço (`ProgramData\Razer\Synapse\Logs\RzSurround\RzSurroundVADStreamingService.log`) vazio — sem diagnóstico de travamento.
 
 ## Caminhos avaliados
