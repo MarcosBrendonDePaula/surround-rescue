@@ -28,6 +28,8 @@ if (-not (Test-Path $src)) { throw "Compile antes: cargo build -p sr-apo --relea
 
 New-Item -ItemType Directory -Force $dst, $eng | Out-Null
 icacls $eng /grant '*S-1-5-19:(OI)(CI)M' '*S-1-5-32-545:(OI)(CI)M' | Out-Null   # LocalService e Usuários
+# o audiodg mantém a DLL aberta: para o áudio, troca o arquivo, religa no fim
+Stop-Service Audiosrv -Force
 Copy-Item $src "$dst\sr_apo.dll" -Force
 & regsvr32.exe /s "$dst\sr_apo.dll"
 if ($LASTEXITCODE -ne 0) { throw "regsvr32 falhou ($LASTEXITCODE)" }
@@ -46,6 +48,6 @@ $list = @($cur | Where-Object { $_ -and $_ -ne $clsid }) + $clsid
 $key.SetValue($efx, [string[]]$list, [Microsoft.Win32.RegistryValueKind]::MultiString)
 $key.Close()
 
-Restart-Service Audiosrv -Force
+Start-Service Audiosrv
 "OK. Cadeia EFX agora: $($list -join ' -> ')"
 "Backup: $bak"
