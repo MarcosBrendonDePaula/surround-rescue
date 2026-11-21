@@ -123,6 +123,7 @@ impl IAudioProcessingObject_Impl for SrApo_Impl {
     }
 
     fn GetRegistrationProperties(&self) -> Result<*mut APO_REG_PROPERTIES> {
+        log("GetRegistrationProperties");
         unsafe {
             let p = CoTaskMemAlloc(std::mem::size_of::<APO_REG_PROPERTIES>()) as *mut APO_REG_PROPERTIES;
             if p.is_null() {
@@ -154,11 +155,13 @@ impl IAudioProcessingObject_Impl for SrApo_Impl {
 
     fn IsInputFormatSupported(&self, _opposite: Ref<IAudioMediaType>, requested: Ref<IAudioMediaType>) -> Result<IAudioMediaType> {
         let req = requested.ok()?;
+        log(&format!("IsInputFormatSupported {:?} ok={}", format_info(req), format_ok(req)));
         if format_ok(req) { Ok(req.clone()) } else { Err(APOERR_FORMAT_NOT_SUPPORTED.into()) }
     }
 
     fn IsOutputFormatSupported(&self, _opposite: Ref<IAudioMediaType>, requested: Ref<IAudioMediaType>) -> Result<IAudioMediaType> {
         let req = requested.ok()?;
+        log(&format!("IsOutputFormatSupported {:?} ok={}", format_info(req), format_ok(req)));
         if format_ok(req) { Ok(req.clone()) } else { Err(APOERR_FORMAT_NOT_SUPPORTED.into()) }
     }
 
@@ -240,7 +243,9 @@ impl IClassFactory_Impl for Factory_Impl {
             return Err(CLASS_E_NOAGGREGATION.into());
         }
         let unk: IUnknown = SrApo::default().into();
-        unsafe { unk.query(iid, object).ok() }
+        let r = unsafe { unk.query(iid, object) };
+        log(&format!("CreateInstance iid={:?} -> {:?}", unsafe { *iid }, r));
+        r.ok()
     }
 
     fn LockServer(&self, lock: BOOL) -> Result<()> {
@@ -265,7 +270,9 @@ extern "system" fn DllGetClassObject(clsid: *const GUID, iid: *const GUID, out: 
             return CLASS_E_CLASSNOTAVAILABLE;
         }
         let f: IClassFactory = Factory.into();
-        f.query(iid, out)
+        let r = f.query(iid, out);
+        log(&format!("  fabrica iid={:?} -> {:?}", *iid, r));
+        r
     }
 }
 
