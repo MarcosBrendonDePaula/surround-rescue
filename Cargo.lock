@@ -4649,6 +4649,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "sr-bridge32"
+version = "0.1.0"
+dependencies = [
+ "windows 0.62.2",
+ "windows-core",
+]
+
+[[package]]
 name = "sr-dsp"
 version = "0.1.0"
 dependencies = [

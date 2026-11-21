@@ -1,0 +1,11 @@
+[package]
+name = "sr-bridge32"
+version = "0.1.0"
+edition = "2021"
+description = "Executor auxiliar de 32 bits: roda plugins VST2 de 32 bits e troca o áudio com o sr-host por pipe"
+license = "GPL-3.0-or-later"
+publish = false
+
+[dependencies]
+windows = { version = "0.62", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_System_LibraryLoader", "Win32_Graphics_Gdi"] }
+windows-core = "0.62"

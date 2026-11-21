@@ -51,6 +51,7 @@ pub fn state_file(endpoint: &str, index: usize, path: &Path) -> PathBuf {
 pub type Shared = Arc<Mutex<Plugin>>;
 pub type Shared2 = Arc<Mutex<crate::vst2::Vst2>>;
 pub type SharedClap = Arc<Mutex<crate::clap::Clap>>;
+pub type Shared32 = Arc<Mutex<crate::bridge32::Bridge32>>;
 
 /// Um plugin carregado de qualquer formato suportado.
 #[derive(Clone)]
@@ -58,6 +59,8 @@ pub enum Any {
     Vst3(Shared),
     Vst2(Shared2),
     Clap(SharedClap),
+    /// VST2 de 32 bits, no executor auxiliar
+    B32(Shared32),
 }
 
 /// Plugin carregado, com o índice dele na lista do arquivo (para abrir a janela certa).
@@ -77,6 +80,7 @@ pub enum Window {
     Vst3(vst3_host::window::PluginWindow),
     Vst2(crate::vst2::Vst2Window, Shared2),
     Clap(crate::vst2::Vst2Window, SharedClap),
+    B32(Shared32),
 }
 
 impl Window {
@@ -95,6 +99,16 @@ impl Window {
                 let w = crate::vst2::Vst2Window::open(&mut *p.lock().unwrap())?;
                 Ok(Window::Clap(w, p.clone()))
             }
+            Any::B32(p) => {
+                let mut g = p.lock().unwrap();
+                if !g.has_editor() {
+                    return Err("o plugin não tem janela própria".into());
+                }
+                if !g.editor_open() {
+                    return Err("o plugin não abriu a janela".into());
+                }
+                Ok(Window::B32(p.clone()))
+            }
         }
     }
 
@@ -103,6 +117,8 @@ impl Window {
             Window::Vst3(w) => w.is_open() && !w.closed_by_user(),
             Window::Vst2(w, _) => !w.closed(),
             Window::Clap(w, _) => !w.closed(),
+            // ocupado processando? considera aberta até a próxima volta
+            Window::B32(p) => p.try_lock().map(|mut g| g.editor_is_open()).unwrap_or(true),
         }
     }
 
@@ -122,6 +138,7 @@ impl Window {
                     w.idle(&mut *g);
                 }
             }
+            Window::B32(_) => {} // o auxiliar cuida da própria janela
         }
     }
 
@@ -136,6 +153,11 @@ impl Window {
             Window::Clap(w, p) => {
                 if let Ok(mut g) = p.lock() {
                     w.close(&mut *g);
+                }
+            }
+            Window::B32(p) => {
+                if let Ok(mut g) = p.lock() {
+                    g.editor_close();
                 }
             }
         }
@@ -159,6 +181,19 @@ pub fn load(endpoint: &str, cfg: &ChainConfig, sample_rate: f64, log: &dyn Fn(&s
                     out.push(Loaded { index, path: e.path.clone(), plugin: Any::Clap(Arc::new(Mutex::new(p))) });
                 }
                 Err(err) => log(&format!("plugin CLAP falhou: {} — {err}", e.path.display())),
+            }
+            continue;
+        }
+        if is_vst2_path(&e.path) && crate::vst2::pe_bits(&e.path) == Some(32) {
+            match crate::bridge32::Bridge32::load(&e.path, sample_rate, PLUGIN_BLOCK) {
+                Ok(mut p) => {
+                    if let Ok(st) = std::fs::read(state_file(endpoint, index, &e.path)) {
+                        p.load_state(&st);
+                    }
+                    log(&format!("plugin VST2 32 bits carregado: {} ({})", p.name, e.path.display()));
+                    out.push(Loaded { index, path: e.path.clone(), plugin: Any::B32(Arc::new(Mutex::new(p))) });
+                }
+                Err(err) => log(&format!("plugin VST2 32 bits falhou: {} — {err}", e.path.display())),
             }
             continue;
         }
@@ -212,6 +247,10 @@ pub fn save_states(endpoint: &str, loaded: &[Loaded], log: &dyn Fn(&str)) {
                 Ok(p) => Ok(p.save_state()),
                 Err(_) => continue,
             },
+            Any::B32(p) => match p.lock() {
+                Ok(mut p) => Ok(p.save_state()),
+                Err(_) => continue,
+            },
         };
         match saved {
             Ok(bytes) => {
@@ -259,6 +298,11 @@ impl crate::graph::Processor for NodeProcs {
                 return true;
             }
             Some(Some(Any::Clap(p))) => {
+                let Ok(mut g) = p.try_lock() else { return false };
+                g.process(l, r);
+                return true;
+            }
+            Some(Some(Any::B32(p))) => {
                 let Ok(mut g) = p.try_lock() else { return false };
                 g.process(l, r);
                 return true;

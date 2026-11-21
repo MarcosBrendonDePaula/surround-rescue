@@ -20,6 +20,7 @@ mod flows;
 mod stats;
 mod vst2;
 mod clap;
+mod bridge32;
 
 use chain::{chains_dir, root_dir, AudioChain, ChainConfig, Loaded};
 use std::collections::HashMap;
@@ -541,9 +542,10 @@ fn scan(extra: &[String]) {
             // 32 bits não pode ser carregado aqui; o nome no arquivo basta para avisar
             Some(32) => {
                 let nm = name.clone().unwrap_or_default();
+                let bridge = bridge32::exe().is_some();
                 // fabricante pela pasta (ex.: VSTPlugins\ReaPlugs) — não dá para abrir 32 bits aqui
                 let vendor = p.parent().and_then(|d| d.file_name()).map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
-                out.push(serde_json::json!({ "path": p, "name": nm, "format": "VST2", "bits": 32, "supported": false,
+                out.push(serde_json::json!({ "path": p, "name": nm, "format": "VST2", "bits": 32, "supported": bridge,
                     "vendor": vendor, "category": categorize("", &nm) }));
             }
             _ => {}
@@ -563,6 +565,7 @@ fn test_plugin(path: &str) {
         chain::Any::Vst3(p) => p.lock().map(|p| p.has_editor()).unwrap_or(false),
         chain::Any::Vst2(p) => p.lock().map(|p| p.has_editor()).unwrap_or(false),
         chain::Any::Clap(p) => p.lock().map(|p| p.has_editor()).unwrap_or(false),
+        chain::Any::B32(p) => p.lock().map(|p| p.has_editor()).unwrap_or(false),
     };
     let mut c = AudioChain::new(&loaded, &cfg, 48000.0, HashMap::new(), HashMap::new(), &|m| println!("{m}"));
     let mut audio: Vec<f32> = (0..48000 * 2).map(|i| ((i / 2) as f32 * 2.0 * std::f32::consts::PI * 440.0 / 48000.0).sin() * 0.5).collect();
