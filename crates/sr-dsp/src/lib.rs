@@ -7,6 +7,7 @@
 pub mod biquad;
 pub mod dynamics;
 pub mod processor;
+pub mod hrir_kemar;
 pub mod surround;
 
 pub use processor::{MicProcessor, Processor};

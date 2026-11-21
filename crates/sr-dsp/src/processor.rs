@@ -97,6 +97,7 @@ impl Processor {
         self.virt.set(s.front_angle);
         // 0..100: 50 = ambiente padrão; 100 = o dobro
         self.virt.amb_gain = s.spatial / 50.0;
+        self.virt.room_gain = s.spatial / 50.0;
 
         let mut list: [Option<Coefs>; 13] = [None; 13];
         let mut n = 0;
@@ -412,8 +413,11 @@ mod tests {
         let mut r = vec![0.0f32; 200];
         l[0] = 0.5;
         p.process_stereo(&mut l, &mut r);
-        let fl = l.iter().position(|v| v.abs() > 1e-4).unwrap();
-        let fr = r.iter().position(|v| v.abs() > 1e-4).unwrap();
+        let on = |x: &[f32]| {
+            let m = x.iter().fold(0.0f32, |a, b| a.max(b.abs()));
+            x.iter().position(|v| v.abs() > 0.3 * m).unwrap()
+        };
+        let (fl, fr) = (on(&l), on(&r));
         // caixa a 60° (máximo): o ouvido oposto ouve ~0,5 ms depois (≈ 24 amostras)
         let itd = fr - fl;
         assert!((18..=30).contains(&itd), "diferença {itd}");
