@@ -380,7 +380,8 @@ async function plScan() {
 function plRender() {
   const list = PL.chain.plugins;
   const rows = list.map((p, i) => `
-    <li class="${p.enabled ? "" : "off"}">
+    <li class="${p.enabled ? "" : "off"}" draggable="true" data-pl-idx="${i}">
+      <span class="grip" title="Arraste para mudar a ordem" aria-hidden="true">⋮⋮</span>
       <label class="toggle" title="Ligar ou desligar este plugin"><input type="checkbox" data-pl-on="${i}"${p.enabled ? " checked" : ""}><span></span></label>
       <div><div class="pname">${esc(baseName(p.path))}</div><div class="ppath">${esc(p.path)}</div></div>
       <div class="pactions">
@@ -433,6 +434,37 @@ function plBind() {
     else if (t.dataset.plDel !== undefined) L.splice(i, 1);
     else return;
     plSave();
+  });
+  // arrastar e soltar para mudar a ordem
+  let dragFrom = null;
+  const chainEl = $("#pl-chain");
+  chainEl.addEventListener("dragstart", (e) => {
+    const li = e.target.closest("li[data-pl-idx]");
+    if (!li) return;
+    dragFrom = Number(li.dataset.plIdx);
+    li.classList.add("dragging");
+    e.dataTransfer.effectAllowed = "move";
+  });
+  chainEl.addEventListener("dragover", (e) => {
+    const li = e.target.closest("li[data-pl-idx]");
+    if (dragFrom === null || !li) return;
+    e.preventDefault();
+    $$("#pl-chain li").forEach((x) => x.classList.toggle("drop-here", x === li));
+  });
+  chainEl.addEventListener("drop", (e) => {
+    const li = e.target.closest("li[data-pl-idx]");
+    if (dragFrom === null || !li) return;
+    e.preventDefault();
+    const to = Number(li.dataset.plIdx);
+    if (to !== dragFrom) {
+      const [moved] = PL.chain.plugins.splice(dragFrom, 1);
+      PL.chain.plugins.splice(to, 0, moved);
+      plSave();
+    }
+  });
+  chainEl.addEventListener("dragend", () => {
+    dragFrom = null;
+    $$("#pl-chain li").forEach((x) => x.classList.remove("dragging", "drop-here"));
   });
   $("#pl-chain").addEventListener("change", (e) => {
     const i = e.target.dataset.plOn;
