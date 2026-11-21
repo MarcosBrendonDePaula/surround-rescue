@@ -359,6 +359,11 @@ function bind() {
 
   // testes
   $("#test-round").addEventListener("click", () => engineTest("ALL"));
+  $("#report-open")?.addEventListener("click", async () => {
+    const b = $("#report-open"); b.disabled = true; const t = b.textContent; b.textContent = "Abrindo…";
+    try { await invoke("report_issue", { lang: window.srLang || "pt" }); } catch (e) { $("#error").textContent = String(e); $("#error").hidden = false; }
+    b.textContent = t; b.disabled = false;
+  });
   $("#surround-style").addEventListener("change", (e) => { cur().surround_style = e.target.value; render(); saveSoon(); });
   $("#test-stop").addEventListener("click", () => engineTest(null));
   window.addEventListener("beforeunload", () => { if (testing) invoke("engine_test", { speaker: -1 }); });

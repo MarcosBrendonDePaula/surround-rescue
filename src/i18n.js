@@ -19,7 +19,8 @@
     "Caixas de trás": "Rear speakers", "Intensidade do surround": "Surround intensity", "Sala virtual": "Virtual room",
     "Um eco curto, como o de um quarto, que tira o som de dentro da cabeça. Desligue para um som mais seco.":
       "A short echo, like a small room's, that moves the sound out of your head. Turn it off for a drier sound.",
-    "Dar a volta": "Go around", "Estilo do surround": "Surround style",
+    "Dar a volta": "Go around", "Relatar problema": "Report a problem", "Abrindo…": "Opening…",
+    "Abre uma issue no GitHub com os logs de execução (sem dados pessoais)": "Opens a GitHub issue with the runtime logs (no personal data)", "Estilo do surround": "Surround style",
     "Razer: o som da música fica junto, como no Nahimic": "Razer: music stays together, like Nahimic",
     "Amplo: centro na frente e ambiente em volta": "Wide: center up front, ambience around you", "Razer (Nahimic)": "Razer (Nahimic)", "Parar o teste": "Stop test", "Parar": "Stop",
     "Clique numa caixa para ouvir o teste. Arraste até o som parecer vir de lá.": "Click a speaker to hear the test. Drag it until the sound seems to come from there.",
@@ -197,6 +198,8 @@
   const sys = (navigator.language || "pt").toLowerCase().startsWith("pt") ? "pt" : "en";
   const lang = pref === "auto" ? sys : pref;
   const L = LANGS[lang];
+  // idioma em uso (o relatório de problema e outros textos gerados fora da tela usam este)
+  window.srLang = lang;
 
   function tr(t) {
     if (!L) return t;

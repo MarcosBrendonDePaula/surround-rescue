@@ -7,7 +7,7 @@
 use serde::{Deserialize, Serialize};
 use std::io::Read;
 
-const REPO: &str = "MarcosBrendonDePaula/surround-rescue";
+pub const REPO: &str = "MarcosBrendonDePaula/surround-rescue";
 
 #[derive(Deserialize, Serialize, Clone, Debug, Default)]
 pub struct Remote {

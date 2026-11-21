@@ -2,6 +2,7 @@
 
 mod devices;
 mod engine;
+mod report;
 mod update;
 mod eqapo;
 mod plugins;
@@ -119,6 +120,16 @@ fn snapshot(state: &AppState) -> Snapshot {
 fn engine_test(speaker: i32, state: State<AppState>) -> Result<(), String> {
     *state.test.lock().unwrap() = speaker.clamp(-1, 7);
     apply_now(&state).map(|_| ())
+}
+
+/// "Relatar um problema": abre uma issue nova no GitHub com dados de execução (sem dados pessoais).
+#[tauri::command]
+async fn report_issue(lang: Option<String>, app: tauri::AppHandle, state: State<'_, AppState>, host: State<'_, plugins::HostProcess>) -> Result<(), String> {
+    let version = app.package_info().version.to_string();
+    let own = state.config.lock().unwrap().own_engine;
+    let running = host.running();
+    let lang = lang.unwrap_or_else(|| "pt".into());
+    tauri::async_runtime::spawn_blocking(move || report::open(&version, own, running, &lang)).await.map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -317,7 +328,7 @@ fn main() {
         .plugin(tauri_plugin_single_instance::init(|app, _, _| show(app)))
         .manage(state)
         .manage(plugins::HostProcess(Mutex::new(None)))
-        .invoke_handler(tauri::generate_handler![engine_test, get_snapshot, set_config, get_status, set_device_engine, set_autostart, preview, recent_apps, scan_plugins, get_chain, set_chain, host_status, open_plugin_window, audio_apps, list_flows, get_flow, set_flow, delete_flow, get_stats, plugin_env, engine_devices, set_engine, get_levels, check_update, install_update])
+        .invoke_handler(tauri::generate_handler![report_issue, engine_test, get_snapshot, set_config, get_status, set_device_engine, set_autostart, preview, recent_apps, scan_plugins, get_chain, set_chain, host_status, open_plugin_window, audio_apps, list_flows, get_flow, set_flow, delete_flow, get_stats, plugin_env, engine_devices, set_engine, get_levels, check_update, install_update])
         .setup(|app| {
             let show_i = MenuItem::with_id(app, "show", "Abrir", true, None::<&str>)?;
             let toggle_i = MenuItem::with_id(app, "toggle", "Ligar/Desligar surround", true, None::<&str>)?;
