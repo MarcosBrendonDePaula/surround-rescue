@@ -233,8 +233,10 @@ pub fn generate_mic(m: &MicSettings) -> String {
 /// config.txt principal: cada arquivo vale só para o seu dispositivo.
 pub fn generate_root(render_id: Option<&str>, capture_id: Option<&str>) -> String {
     let mut out = String::from("# Controlado pelo Surround Rescue\n");
-    out.push_str(&format!("Device: {}\n", render_id.unwrap_or("Razer Kraken 7.1 Chroma Fone de ouvido do headset")));
-    out.push_str("Include: surround-rescue.txt\n");
+    if let Some(r) = render_id {
+        out.push_str(&format!("Device: {}\n", r));
+        out.push_str("Include: surround-rescue.txt\n");
+    }
     if let Some(c) = capture_id {
         out.push_str(&format!("Device: {}\n", c));
         out.push_str("Include: surround-rescue-mic.txt\n");

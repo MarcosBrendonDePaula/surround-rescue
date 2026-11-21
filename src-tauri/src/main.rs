@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod devices;
 mod eqapo;
 mod profiles;
 mod system;
@@ -49,9 +50,9 @@ fn apply_now(state: &AppState) -> Result<String, String> {
         }
     }
     let profile = cfg.resolve(fg.as_deref()).clone();
-    let hp = system::kraken_endpoint("Render");
-    let mic = system::kraken_endpoint("Capture");
-    let root = eqapo::generate_root(hp.id.as_deref(), mic.id.as_deref());
+    let hp = system::pick(&devices::list("Render"), cfg.output_device.as_deref());
+    let mic = system::pick(&devices::list("Capture"), cfg.input_device.as_deref());
+    let root = eqapo::generate_root(hp.as_ref().map(|d| d.id.as_str()), mic.as_ref().map(|d| d.id.as_str()));
     let out = eqapo::generate(&profile.settings);
     let mic_txt = eqapo::generate_mic(&cfg.mic);
     let joined = format!("{root}\0{out}\0{mic_txt}");
@@ -94,8 +95,21 @@ fn set_config(config: Config, state: State<AppState>) -> Result<Snapshot, String
 }
 
 #[tauri::command]
-fn get_status() -> system::Status {
-    system::status()
+fn get_status(state: State<AppState>) -> system::Status {
+    let c = state.config.lock().unwrap().clone();
+    system::status(c.output_device.as_deref(), c.input_device.as_deref())
+}
+
+/// Liga/desliga o motor de áudio num dispositivo (pede administrador uma vez).
+#[tauri::command]
+async fn set_device_engine(flow: String, id: String, on: bool) -> Result<(), String> {
+    if !system::apo_installed() {
+        return Err("O motor de áudio (Equalizer APO) não está instalado. Reinstale o Surround Rescue.".into());
+    }
+    let op = if on { "install" } else { "uninstall" };
+    tauri::async_runtime::spawn_blocking(move || devices::run_elevated(&format!("--apo {op} {flow} {id}")))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -138,6 +152,10 @@ fn show(app: &AppHandle) {
 }
 
 fn main() {
+    let args: Vec<String> = std::env::args().collect();
+    if let Some(code) = devices::handle_cli(&args) {
+        std::process::exit(code);
+    }
     let state = AppState { config: Mutex::new(load()), applied: Mutex::new(String::new()), last_text: Mutex::new(String::new()), seen: Mutex::new(Default::default()) };
     // Reaplica na inicialização: garante o estado salvo mesmo após reinício.
     let _ = apply_now(&state);
@@ -145,7 +163,7 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _, _| show(app)))
         .manage(state)
-        .invoke_handler(tauri::generate_handler![get_snapshot, set_config, get_status, set_autostart, preview, recent_apps])
+        .invoke_handler(tauri::generate_handler![get_snapshot, set_config, get_status, set_device_engine, set_autostart, preview, recent_apps])
         .setup(|app| {
             let show_i = MenuItem::with_id(app, "show", "Abrir", true, None::<&str>)?;
             let toggle_i = MenuItem::with_id(app, "toggle", "Ligar/Desligar surround", true, None::<&str>)?;

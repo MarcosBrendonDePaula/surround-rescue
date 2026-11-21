@@ -7,27 +7,21 @@ use std::path::PathBuf;
 use std::process::Command;
 use winreg::enums::*;
 use winreg::RegKey;
+use crate::devices::{self, Device};
 
 const EQAPO_DIR: &str = r"C:\Program Files\EqualizerAPO";
-const EQAPO_CLSID: &str = "EC1CC9CE-FAED-4822-828A-82A81A6F018F";
 const OUT_FILE: &str = "surround-rescue.txt";
 const MIC_FILE: &str = "surround-rescue-mic.txt";
-const MMDEV: &str = r"SOFTWARE\Microsoft\Windows\CurrentVersion\MMDevices\Audio";
-const PKEY_DEVICE_DESC: &str = "{b3f8fa53-0004-438e-9003-51a46e139bfc},6";
 const RUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
 const RUN_NAME: &str = "SurroundRescue";
-
-#[derive(Serialize, Clone, Default)]
-pub struct Endpoint {
-    pub id: Option<String>,
-    pub apo: bool,
-}
 
 #[derive(Serialize)]
 pub struct Status {
     pub apo_installed: bool,
-    pub headphone: Endpoint,
-    pub mic: Endpoint,
+    pub outputs: Vec<Device>,
+    pub inputs: Vec<Device>,
+    pub output: Option<Device>,
+    pub input: Option<Device>,
     pub razer_service_running: bool,
     pub config_hooked: bool,
     pub autostart: bool,
@@ -37,34 +31,31 @@ fn config_dir() -> PathBuf {
     PathBuf::from(EQAPO_DIR).join("config")
 }
 
-/// Procura o endpoint ativo do Kraken em Render ou Capture.
-pub fn kraken_endpoint(flow: &str) -> Endpoint {
-    let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
-    let Ok(root) = hklm.open_subkey(format!(r"{MMDEV}\{flow}")) else { return Endpoint::default() };
-    for id in root.enum_keys().flatten() {
-        let Ok(dev) = root.open_subkey(&id) else { continue };
-        let state: u32 = dev.get_value("DeviceState").unwrap_or(0);
-        if state & 0xF != 1 {
-            continue;
-        }
-        let desc: String = dev.open_subkey("Properties").and_then(|p| p.get_value(PKEY_DEVICE_DESC)).unwrap_or_default();
-        if !desc.contains("Kraken") {
-            continue;
-        }
-        let apo = dev
-            .open_subkey("FxProperties")
-            .map(|fx| fx.enum_values().flatten().any(|(_, v)| v.to_string().to_uppercase().contains(EQAPO_CLSID)))
-            .unwrap_or(false);
-        return Endpoint { id: Some(id), apo };
-    }
-    Endpoint::default()
+pub fn apo_installed() -> bool {
+    PathBuf::from(EQAPO_DIR).join("EqualizerAPO.dll").exists()
 }
 
-pub fn status() -> Status {
+/// Dispositivo escolhido; sem escolha: o primeiro com o motor ligado, preferindo um headset Razer.
+pub fn pick(list: &[Device], chosen: Option<&str>) -> Option<Device> {
+    if let Some(id) = chosen {
+        if let Some(d) = list.iter().find(|d| d.id == id) {
+            return Some(d.clone());
+        }
+    }
+    let mut with_apo: Vec<&Device> = list.iter().filter(|d| d.apo).collect();
+    with_apo.sort_by_key(|d| !d.device.contains("Kraken"));
+    with_apo.first().cloned().cloned()
+}
+
+pub fn status(out_choice: Option<&str>, in_choice: Option<&str>) -> Status {
+    let outputs = devices::list("Render");
+    let inputs = devices::list("Capture");
     Status {
-        apo_installed: PathBuf::from(EQAPO_DIR).join("EqualizerAPO.dll").exists(),
-        headphone: kraken_endpoint("Render"),
-        mic: kraken_endpoint("Capture"),
+        apo_installed: apo_installed(),
+        output: pick(&outputs, out_choice),
+        input: pick(&inputs, in_choice),
+        outputs,
+        inputs,
         razer_service_running: razer_running(),
         config_hooked: fs::read_to_string(config_dir().join("config.txt"))
             .map(|t| t.contains(&format!("Include: {OUT_FILE}")))

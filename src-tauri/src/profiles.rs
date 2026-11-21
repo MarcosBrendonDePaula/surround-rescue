@@ -27,6 +27,10 @@ pub struct Config {
     pub auto_switch: bool,
     pub app_rules: Vec<AppRule>,
     pub mic: MicSettings,
+    /// Id do dispositivo de saída escolhido (None = automático)
+    pub output_device: Option<String>,
+    /// Id do microfone escolhido (None = automático)
+    pub input_device: Option<String>,
 }
 
 impl Default for Config {
@@ -37,6 +41,8 @@ impl Default for Config {
             auto_switch: true,
             app_rules: vec![],
             mic: MicSettings::default(),
+            output_device: None,
+            input_device: None,
         }
     }
 }

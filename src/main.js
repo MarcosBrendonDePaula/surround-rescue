@@ -170,15 +170,45 @@ function saveSoon() { clearTimeout(timer); timer = setTimeout(save, 120); }
 // ---------- status ----------
 async function refreshStatus() {
   const s = await invoke("get_status");
+  const label = (d) => `${d.name} (${d.device})`;
   const items = [
-    [s.apo_installed, "Equalizer APO instalado", "Equalizer APO não instalado", "bad"],
-    [s.headphone.apo, "Fone do Kraken: efeito ativo", s.headphone.id ? "Fone do Kraken sem Equalizer APO (abra o Configurator)" : "Kraken não conectado", "bad"],
-    [s.mic.apo, "Microfone do Kraken: efeito ativo", s.mic.id ? "Microfone sem Equalizer APO (marque-o no Configurator para usar a aba Microfone)" : "Microfone do Kraken não encontrado", "warn"],
-    [s.config_hooked, "Configuração conectada", "Configuração ainda não aplicada", "warn"],
+    [s.apo_installed, "Motor de áudio instalado", "Motor de áudio não instalado: reinstale o Surround Rescue", "bad"],
+    [s.output?.apo, `Efeito ativo em: ${s.output ? label(s.output) : ""}`, "Nenhuma saída com o efeito ativo: escolha o fone acima e ative", "bad"],
+    [s.input?.apo, `Microfone com melhorias: ${s.input ? label(s.input) : ""}`, "Nenhum microfone com o motor ativo", "warn"],
+    [s.config_hooked, "Configuração aplicada", "Configuração ainda não aplicada", "warn"],
     [!s.razer_service_running, "Razer Surround antigo desligado", "Razer Surround antigo ainda rodando: pode disputar o fone", "warn"],
   ];
-  $("#status").innerHTML = items.map(([ok, y, n, l]) => `<div class="${ok ? "ok" : l}">${ok ? y : n}</div>`).join("");
+  $("#status").innerHTML = items.map(([ok, y, n, l]) => `<div class="${ok ? "ok" : l}">${esc(ok ? y : n)}</div>`).join("");
   $("#autostart").checked = s.autostart;
+  renderDevices("#dev-out", "#dev-out-state", s.outputs, s.output, "output_device", "Render");
+  renderDevices("#dev-in", "#dev-in-state", s.inputs, s.input, "input_device", "Capture");
+}
+
+function renderDevices(selSel, stateSel, list, chosen, key, flow) {
+  const sel = $(selSel);
+  const pinned = cfg()[key];
+  sel.innerHTML = `<option value=""${pinned ? "" : " selected"}>Automático${!pinned && chosen ? ` — ${esc(chosen.name)}` : ""}</option>` +
+    list.map((d) => `<option value="${d.id}"${pinned === d.id ? " selected" : ""}>${esc(`${d.name} (${d.device})`)}${d.apo ? " ✓" : ""}</option>`).join("");
+  const target = list.find((d) => d.id === (pinned || chosen?.id));
+  const box = $(stateSel);
+  if (!target) { box.innerHTML = `<span class="tag">Nenhum dispositivo com o motor ativo.</span>`; return; }
+  box.innerHTML = target.apo
+    ? `<span class="tag on">● Efeito ativo neste dispositivo</span><button class="pill" data-engine="off">Desativar aqui</button>`
+    : target.needs_configurator
+      ? `<span class="tag">Este dispositivo usa um modo que só o Configurator do Equalizer APO consegue ativar.</span>`
+      : `<span class="tag">Sem efeito neste dispositivo</span><button class="pill solid" data-engine="on">Ativar neste dispositivo</button>`;
+  box.querySelector("[data-engine]")?.addEventListener("click", async (e) => {
+    const on = e.target.dataset.engine === "on";
+    e.target.disabled = true;
+    e.target.textContent = on ? "Ativando… confirme a permissão" : "Desativando…";
+    try {
+      await invoke("set_device_engine", { flow, id: target.id, on });
+      cfg()[key] = target.id;
+      await save();
+      $("#error").hidden = true;
+    } catch (err) { $("#error").textContent = String(err); $("#error").hidden = false; }
+    refreshStatus();
+  });
 }
 
 // ---------- testes de som ----------
@@ -290,6 +320,8 @@ function bind() {
   });
 
   // configurações
+  $("#dev-out").addEventListener("change", (e) => { cfg().output_device = e.target.value || null; save().then(refreshStatus); });
+  $("#dev-in").addEventListener("change", (e) => { cfg().input_device = e.target.value || null; save().then(refreshStatus); });
   $("#autostart").addEventListener("change", async (e) => {
     try { await invoke("set_autostart", { on: e.target.checked }); } catch (err) { $("#error").textContent = String(err); $("#error").hidden = false; }
     refreshStatus();

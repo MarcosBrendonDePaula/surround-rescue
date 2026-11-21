@@ -121,7 +121,7 @@
       <!-- MICROFONE -->
       <section id="tab-microfone" class="tab">
         <h1>Microfone</h1>
-        <p class="lead">Vale para o microfone do Kraken em todos os programas: Discord, jogos e gravações.</p>
+        <p class="lead">Vale para o microfone escolhido em Configurações, em todos os programas: Discord, jogos e gravações.</p>
         <div class="grid2">
           <div class="block">
             <label class="toggle"><input type="checkbox" data-m="enabled"><span></span>Melhorias do microfone</label>
@@ -163,6 +163,18 @@
       <!-- CONFIGURAÇÕES -->
       <section id="tab-configuracoes" class="tab">
         <h1>Configurações</h1>
+        <div class="grid2 devices">
+          <div class="block">
+            <h2>Fone / saída de som</h2>
+            <select id="dev-out" aria-label="Dispositivo de saída"></select>
+            <div class="devstate" id="dev-out-state"></div>
+          </div>
+          <div class="block">
+            <h2>Microfone</h2>
+            <select id="dev-in" aria-label="Microfone"></select>
+            <div class="devstate" id="dev-in-state"></div>
+          </div>
+        </div>
         <div class="grid2">
           <div class="block">
             <h2>Estado do sistema</h2>

@@ -33,3 +33,18 @@ iniciar com o Windows, configuração separada por dispositivo (`Device:` com GU
 
 ## Fora do v1
 7.1 real, perfis HRIR (convolução), perfil por programa, microfone (gate/redução de ruído), VU meter, auto-reparo após update do Windows.
+
+## v0.4 (feito)
+- Qualquer dispositivo de saída/entrada (lista do Windows), não só o Kraken.
+- Ligação do Equalizer APO pelo próprio app (`--apo install|uninstall Render|Capture {id}`, elevado via UAC),
+  reproduzindo o esquema "Child APOs" do Configurator 1.4 (validado contra o registro real do Kraken).
+  Dispositivos que só usam SFX/MFX ainda exigem o Configurator.
+- Instalador único (NSIS perMachine) com o Equalizer APO 1.4.2 embutido, instalado em silêncio se faltar (GPL-2, ver THIRD-PARTY.txt).
+
+## Descoberta
+O driver do Kraken trazia um APO da Nahimic (`{29dc9ab1-...}` CVHTAPOLFX) na posição LFX — a Razer usava APO dentro do driver assinado do headset,
+além do driver virtual do Razer Surround.
+
+## Futuro: APO próprio
+Motivo: compressor/limitador real (normalização), mudança instantânea sem recarregar arquivo, VU meter, HRTF próprio.
+A lógica de áudio (`eqapo.rs`) já está isolada do motor para permitir a troca.

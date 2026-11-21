@@ -1,0 +1,8 @@
+Surround Rescue inclui o instalador do Equalizer APO 1.4.2 (64 bits).
+
+Equalizer APO — Copyright (C) Jonas Thedering
+Licença: GNU General Public License v2 (GPL-2.0)
+Código-fonte e licença: https://sourceforge.net/projects/equalizerapo/
+
+O instalador é distribuído sem modificações e executado em modo silencioso
+apenas quando o Equalizer APO ainda não está instalado.
