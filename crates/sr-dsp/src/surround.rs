@@ -165,6 +165,7 @@ pub struct Virtualizer {
     pub room_gain: f64,
     /// peso de cada caixa em cada ouvido nos graves (nível da resposta em 300 Hz)
     low_w: [[f32; 2]; SPEAKERS],
+    out_k: f32,
     low_lp: [[Biquad; 2]; 2],
     high_hp: [[Biquad; 2]; 2],
 }
@@ -188,6 +189,7 @@ impl Virtualizer {
             amb_gain: 1.0,
             room_gain: 1.0,
             low_w: [[1.0; 2]; SPEAKERS],
+            out_k: 0.5,
             low_lp: [[Biquad::default(); 2]; 2],
             high_hp: [[Biquad::default(); 2]; 2],
         };
@@ -220,6 +222,29 @@ impl Virtualizer {
                 self.low_w[i][e] = (re * re + im * im).sqrt() as f32;
             }
         }
+        // caixa do centro com o mesmo volume que a voz tinha vindo das duas caixas da frente
+        // (média de 500 Hz a 4 kHz, no ouvido esquerdo; o direito é espelho). O upmix entrega o
+        // centro multiplicado por √2, por isso a divisão.
+        let mag = |ir: &[f32], f: f64| {
+            let w = 2.0 * std::f64::consts::PI * f / self.sr;
+            let (mut re, mut im) = (0.0f64, 0.0f64);
+            for (k, v) in ir.iter().enumerate() {
+                re += *v as f64 * (w * k as f64).cos();
+                im += *v as f64 * (w * k as f64).sin();
+            }
+            (re, im)
+        };
+        let (mut ph, mut ce) = (0.0f64, 0.0f64);
+        for f in [500.0, 700.0, 1000.0, 1400.0, 2000.0, 2800.0, 4000.0] {
+            let (a, b) = mag(&self.ir[0][0][..self.taps], f);
+            let (c, d) = mag(&self.ir[1][0][..self.taps], f);
+            ph += (a + c).powi(2) + (b + d).powi(2);
+            let (e, g) = mag(&self.ir[2][0][..self.taps], f);
+            ce += e * e + g * g;
+        }
+        self.gains[2] = ((ph / ce.max(1e-12)).sqrt() / std::f64::consts::SQRT_2) as f32;
+        // volume geral: o que está no meio do estéreo sai no mesmo nível de quando o surround está desligado
+        self.out_k = (1.0 / (ph / 7.0).sqrt().max(1e-6)) as f32;
         let lp = Coefs::new(Kind::LowPass, self.sr, BASS_SPLIT, 0.0, std::f64::consts::FRAC_1_SQRT_2);
         let hp = Coefs::new(Kind::HighPass, self.sr, BASS_SPLIT, 0.0, std::f64::consts::FRAC_1_SQRT_2);
         for e in 0..2 {
@@ -254,9 +279,10 @@ impl Virtualizer {
         }
         self.hpos = (p + 1) % n;
         // sala: entra a soma de tudo, sai pela frente, baixinha
-        let (rl, rr) = self.room.process(mono * 0.25);
+        // sala desligada: nem calcula (e começa limpa quando voltar)
+        let (rl, rr) = if self.room_gain > 0.0 { self.room.process(mono * 0.25) } else { (0.0, 0.0) };
         let rg = (0.12 * self.room_gain) as f32;
-        let k = 0.5f32; // as caixas somam nos dois ouvidos
+        let k = self.out_k; // as caixas somam nos dois ouvidos
         // divisor Linkwitz-Riley: graves diretos + o resto pelas respostas de cabeça (a sala também
         // perde os graves: graves com eco embola)
         let hi = [k * out[0] + rg * rl, k * out[1] + rg * rr];

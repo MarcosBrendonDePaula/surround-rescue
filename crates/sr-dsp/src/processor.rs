@@ -137,7 +137,7 @@ impl Processor {
         let boost = s.bass_db().max(s.presence_db()).max(s.voice_db()).max(eq_max).max(0.0);
         // folga antes dos filtros: 3 dB fixos (como a Razer) + metade do maior reforço; o resto dos picos
         // fica com o limitador. Antes era o reforço inteiro: aumentar o graves abaixava todo o resto.
-        let headroom = 3.0 + 0.5 * boost + if s.spatial > 0.0 { 1.5 } else { 0.0 } + 20.0 * s.width().log10();
+        let headroom = 3.0 + 0.5 * boost + 0.0 + 20.0 * s.width().log10();
         self.pre.target = db_to_lin(s.volume_db - headroom);
         self.width.target = s.width();
         self.vmix.target = if s.spatial > 0.0 { 1.0 } else { 0.0 };
@@ -148,7 +148,7 @@ impl Processor {
         self.test = s.test_speaker;
         // 0..100: 50 = ambiente padrão; 100 = o dobro
         self.virt.amb_gain = s.spatial / 50.0;
-        self.virt.room_gain = s.spatial / 50.0;
+        self.virt.room_gain = if s.room { s.spatial / 50.0 } else { 0.0 };
         let was = self.upmix_on;
         self.upmix_on = s.spatial > 0.0;
         if self.upmix_on && !was {
@@ -627,5 +627,27 @@ mod razer_parity_tests {
         };
         assert!(run(0.002) < -20.0, "ruído a -54 dB deveria sumir: {}", run(0.002));
         assert!(run(0.1).abs() < 1.0, "voz a -20 dB passa inteira: {}", run(0.1));
+    }
+}
+
+#[cfg(test)]
+mod voz_tests {
+    use super::*;
+
+    #[test]
+    fn voz_no_centro_nao_fica_mais_baixa_com_surround() {
+        // voz igual nos dois lados: com e sem surround, volume parecido
+        let lvl = |spatial: f64| {
+            let mut p = Processor::new(48000.0);
+            p.set(&Settings { spatial, room: false, bass_enabled: false, normalization_enabled: false, eq_enabled: false, ..Settings::default() });
+            // "voz": vários tons de 300 Hz a 3 kHz (uma frequência só cai justo num vale da resposta da cabeça)
+            let tones = [300.0f32, 500.0, 800.0, 1200.0, 2000.0, 3000.0];
+            let mut l: Vec<f32> = (0..48000).map(|i| tones.iter().map(|f| (i as f32 * 2.0 * std::f32::consts::PI * f / 48000.0 + f).sin()).sum::<f32>() * 0.04).collect();
+            let mut r = l.clone();
+            p.process_stereo(&mut l, &mut r);
+            10.0 * (l[24000..].iter().map(|x| (x * x) as f64).sum::<f64>()).log10()
+        };
+        let d = lvl(50.0) - lvl(0.0);
+        assert!(d.abs() < 2.0, "voz mudou {d:+.1} dB com o surround");
     }
 }

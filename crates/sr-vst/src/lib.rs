@@ -98,6 +98,7 @@ impl SrParams {
             rear_angle: 150.0,
             test_speaker: -1,
             spatial: self.spatial.value() as f64,
+            room: true,
             stereo_enhanced: self.stereo_enhanced.value(),
             bass_enabled: bass > 0.0,
             bass_level: bass,

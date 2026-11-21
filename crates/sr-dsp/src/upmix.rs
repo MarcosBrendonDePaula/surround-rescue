@@ -17,6 +17,11 @@ pub struct Upmix {
     pr: Vec<f32>,
     x: Vec<C>,
     clarity: Vec<f32>,
+    // ganhos por faixa já suavizados (no tempo e entre vizinhas) e rascunho
+    gc: Vec<f32>,
+    ga: Vec<f32>,
+    raw_c: Vec<f32>,
+    raw_a: Vec<f32>,
     spec: Box<[[C; N]; 2]>,
     outs: Box<[[C; N]; 5]>,
     /// fração da parte comum que vai para o centro (0..1)
@@ -34,6 +39,10 @@ impl Upmix {
             pr: vec![0.0; BINS],
             x: vec![C::default(); BINS],
             clarity: vec![1.0; BINS],
+            gc: vec![0.0; BINS],
+            ga: vec![0.0; BINS],
+            raw_c: vec![0.0; BINS],
+            raw_a: vec![0.0; BINS],
             spec: Box::new([[C::default(); N]; 2]),
             outs: Box::new([[C::default(); N]; 5]),
             center: 0.7,
@@ -77,7 +86,9 @@ impl Upmix {
             let (a0, a1) = self.an.split_at_mut(1);
             frame_pair(&self.fft, &mut a0[0], &mut a1[0], &mut s0[0], &mut s1[0]);
         }
-        let a = 0.6f32; // média no tempo (~13 ms): estimativa estável sem atrasar a reação
+        // médias longas (~30 ms) e ganhos que mudam devagar: ganho pulando em cada faixa é o que
+        // dá o som "de água" típico de processamento por frequência
+        let a = 0.8f32;
         for k in 0..BINS {
             let (lk, rk) = (self.spec[0][k], self.spec[1][k]);
             self.pl[k] = a * self.pl[k] + (1.0 - a) * lk.norm2();
@@ -89,13 +100,23 @@ impl Upmix {
             // semelhança (1 = igual nos dois lados) e coerência (1 = mesmo som, 0 = sons sem relação)
             let sim = (2.0 * xa / (pl + pr + 1e-12)).min(1.0);
             let coh = (xa / (pl * pr).sqrt().max(1e-12)).min(1.0);
-            let c = lk.add(rk).scale(0.5 * self.center * sim * sim);
-            let amb = (1.0 - coh).clamp(0.0, 1.0).sqrt();
+            self.raw_c[k] = self.center * sim * sim;
+            self.raw_a[k] = (1.0 - coh).clamp(0.0, 1.0).sqrt();
+        }
+        let t = 0.75f32; // ganho: ~20 ms para mudar
+        for k in 0..BINS {
+            let (km, kp) = (k.saturating_sub(1), (k + 1).min(BINS - 1));
+            let c = 0.25 * self.raw_c[km] + 0.5 * self.raw_c[k] + 0.25 * self.raw_c[kp];
+            let am = 0.25 * self.raw_a[km] + 0.5 * self.raw_a[k] + 0.25 * self.raw_a[kp];
+            self.gc[k] = t * self.gc[k] + (1.0 - t) * c;
+            self.ga[k] = t * self.ga[k] + (1.0 - t) * am;
+            let (lk, rk) = (self.spec[0][k], self.spec[1][k]);
+            let c = lk.add(rk).scale(0.5 * self.gc[k]);
             self.outs[0][k] = lk.sub(c);
             self.outs[1][k] = rk.sub(c);
             self.outs[2][k] = c.scale(self.clarity[k] * std::f32::consts::SQRT_2);
-            self.outs[3][k] = lk.scale(amb);
-            self.outs[4][k] = rk.scale(amb);
+            self.outs[3][k] = lk.scale(self.ga[k]);
+            self.outs[4][k] = rk.scale(self.ga[k]);
         }
         // 5 saídas com 3 FFTs inversas (duas por vez)
         let (o01, rest) = self.outs.split_at_mut(2);
@@ -117,6 +138,7 @@ impl Upmix {
         self.pl.iter_mut().for_each(|v| *v = 0.0);
         self.pr.iter_mut().for_each(|v| *v = 0.0);
         self.x.iter_mut().for_each(|v| *v = C::default());
+        self.gc.iter_mut().chain(self.ga.iter_mut()).for_each(|v| *v = 0.0);
         self.pos = 0;
     }
 }

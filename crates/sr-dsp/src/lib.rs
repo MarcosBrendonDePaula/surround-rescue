@@ -39,6 +39,8 @@ pub struct Settings {
     pub test_speaker: i32,
     /// Intensidade do som surround virtual 0..=100
     pub spatial: f64,
+    /// Sala virtual: um eco curto que tira o som de dentro da cabeça
+    pub room: bool,
     // ---- ÁUDIO ----
     /// "Estéreo melhorado" (WidenStereoSound)
     pub stereo_enhanced: bool,
@@ -69,6 +71,7 @@ impl Default for Settings {
             rear_angle: 150.0,
             test_speaker: -1,
             spatial: 50.0,
+            room: true,
             stereo_enhanced: false,
             bass_enabled: true,
             bass_level: 20.0,
