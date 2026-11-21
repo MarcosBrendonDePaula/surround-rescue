@@ -13,6 +13,7 @@
 
 mod chain;
 mod graph;
+mod send;
 
 use chain::{chains_dir, root_dir, AudioChain, ChainConfig, Loaded};
 use std::collections::HashMap;
@@ -52,6 +53,8 @@ struct Device {
     loaded: Vec<Loaded>,
     loaded_sr: u32,
     windows: HashMap<usize, PluginWindow>,
+    /// Envios para outros dispositivos (mantêm as threads de saída vivas)
+    senders: Vec<send::Sender>,
     slot: Slot,
     stop: Arc<AtomicBool>,
 }
@@ -67,6 +70,7 @@ impl Device {
             loaded: vec![],
             loaded_sr: 0,
             windows: HashMap::new(),
+            senders: vec![],
             slot: Arc::new(Mutex::new(None)),
             stop: Arc::new(AtomicBool::new(false)),
         }
@@ -98,7 +102,25 @@ impl Device {
         log(&format!("{}: preparando cadeia a {sr} Hz", self.endpoint));
         self.loaded = chain::load(&self.endpoint, &self.cfg, sr as f64, &log);
         self.loaded_sr = sr;
-        *self.slot.lock().unwrap() = Some(AudioChain::new(&self.loaded, &self.cfg, sr as f64, &log));
+        // envios: um por nó "send", recusando o que faria o som voltar para cá (microfonia digital)
+        self.senders.clear();
+        let mut producers = HashMap::new();
+        if let Some(g) = &self.cfg.graph {
+            for n in &g.nodes {
+                if let graph::NodeKind::Send { device } = &n.kind {
+                    let dev = device.to_lowercase();
+                    if dev == self.endpoint || sends_back(&dev, &self.endpoint) {
+                        log(&format!("{}: envio para {dev} recusado (o som voltaria para cá)", self.endpoint));
+                        continue;
+                    }
+                    let (prod, s) = send::Sender::start(&dev, sr, log);
+                    log(&format!("{}: enviando para {dev}", self.endpoint));
+                    producers.insert(n.id.clone(), prod);
+                    self.senders.push(s);
+                }
+            }
+        }
+        *self.slot.lock().unwrap() = Some(AudioChain::new(&self.loaded, &self.cfg, sr as f64, producers, &log));
     }
 
     /// Ciclo lento (1 s): canal, mudanças no arquivo e na taxa.
@@ -161,6 +183,28 @@ impl Drop for Device {
         self.close_windows();
         chain::save_states(&self.endpoint, &self.loaded, &log);
     }
+}
+
+/// O fluxo do dispositivo `from` envia (direta ou indiretamente) para `to`?
+fn sends_back(from: &str, to: &str) -> bool {
+    let mut seen = vec![];
+    let mut stack = vec![from.to_string()];
+    while let Some(d) = stack.pop() {
+        if d == to {
+            return true;
+        }
+        if seen.contains(&d) {
+            continue;
+        }
+        seen.push(d.clone());
+        let cfg = read_chain(&chains_dir().join(format!("{d}.json")));
+        for n in cfg.graph.map(|g| g.nodes).unwrap_or_default() {
+            if let graph::NodeKind::Send { device } = n.kind {
+                stack.push(device.to_lowercase());
+            }
+        }
+    }
+    false
 }
 
 fn audio_thread(ch: Arc<sr_ipc::Channel>, slot: Slot, stop: Arc<AtomicBool>) {
@@ -278,7 +322,7 @@ fn test_plugin(path: &str) {
         std::process::exit(1);
     }
     let editor = loaded[0].plugin.lock().map(|p| p.has_editor()).unwrap_or(false);
-    let mut c = AudioChain::new(&loaded, &cfg, 48000.0, &|m| println!("{m}"));
+    let mut c = AudioChain::new(&loaded, &cfg, 48000.0, HashMap::new(), &|m| println!("{m}"));
     let mut audio: Vec<f32> = (0..48000 * 2).map(|i| ((i / 2) as f32 * 2.0 * std::f32::consts::PI * 440.0 / 48000.0).sin() * 0.5).collect();
     let orig = audio.clone();
     let t0 = Instant::now();

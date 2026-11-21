@@ -10,7 +10,8 @@ path = "src/main.rs"
 
 [dependencies]
 sr-ipc = { path = "../sr-ipc" }
+sr-bridge = { path = "../sr-bridge" }
 vst3-host = { version = "0.11.1", default-features = false }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-windows = { version = "0.62", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging"] }
+windows = { version = "0.62", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_Media_Audio", "Win32_System_Com", "Win32_System_Com_StructuredStorage", "Win32_System_Variant", "Win32_System_Threading"] }

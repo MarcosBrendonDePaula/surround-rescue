@@ -134,6 +134,8 @@ impl crate::graph::Processor for NodeProcs {
 
 /// Lado do áudio: o fluxo planejado, os plugins e buffers próprios (sem alocar no bloco).
 pub struct AudioChain {
+    /// Envios para outros dispositivos: (nó, fila da ponte)
+    sends: Vec<(usize, sr_bridge::ring::Producer)>,
     plan: Option<crate::graph::Plan>,
     procs: NodeProcs,
     bufs: Vec<[Vec<f32>; 2]>,
@@ -142,7 +144,13 @@ pub struct AudioChain {
 
 impl AudioChain {
     /// `loaded` = plugins carregados (com a posição na lista); `cfg` traz o fluxo (ou vira fila).
-    pub fn new(loaded: &[Loaded], cfg: &ChainConfig, sample_rate: f64, log: &dyn Fn(&str)) -> AudioChain {
+    pub fn new(
+        loaded: &[Loaded],
+        cfg: &ChainConfig,
+        sample_rate: f64,
+        mut sends: std::collections::HashMap<String, sr_bridge::ring::Producer>,
+        log: &dyn Fn(&str),
+    ) -> AudioChain {
         let graph = cfg.graph.clone().unwrap_or_else(|| crate::graph::Graph::serial(cfg.plugins.len()));
         let plan = match crate::graph::plan(&graph) {
             Ok(p) => Some(p),
@@ -162,7 +170,8 @@ impl AudioChain {
         let mut ab = AudioBuffers::new(2, 2, MAX_FRAMES, sample_rate);
         ab.block_size = 0;
         let bufs = (0..graph.nodes.len()).map(|_| [Vec::with_capacity(MAX_FRAMES), Vec::with_capacity(MAX_FRAMES)]).collect();
-        AudioChain { plan, procs: NodeProcs { plugins, ab }, bufs, sample_rate }
+        let sends = graph.nodes.iter().enumerate().filter_map(|(i, n)| sends.remove(&n.id).map(|p| (i, p))).collect();
+        AudioChain { sends, plan, procs: NodeProcs { plugins, ab }, bufs, sample_rate }
     }
 
     pub fn sample_rate(&self) -> f64 {
@@ -182,6 +191,13 @@ impl AudioChain {
             inp[c].extend((0..frames).map(|i| audio[i * channels + c]));
         }
         crate::graph::run(plan, &mut self.bufs, frames, &mut self.procs);
+        // entrega aos envios (fila cheia = descarta; nunca espera)
+        for (node, prod) in &self.sends {
+            let b = &self.bufs[*node];
+            for k in 0..frames.min(b[0].len()) {
+                prod.push(b[0][k], b[1][k]);
+            }
+        }
         let out = &self.bufs[plan.output];
         for c in 0..2 {
             for i in 0..frames {

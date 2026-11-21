@@ -22,25 +22,39 @@ pub const TARGET_MS: f64 = 30.0;
 /// Quanto a proporção pode desviar para acompanhar o relógio (±0,5%).
 const MAX_ADJUST: f64 = 0.005;
 
-/// Controle de relógio: PI sobre o erro de nível do buffer (em amostras).
+/// Controle de relógio: PI sobre o nível MÉDIO do buffer.
+///
+/// O nível real é serrilhado (o fluxo entrega blocos de 10 ms de uma vez), então a medida passa
+/// por uma média lenta antes do controle; o termo integral é bem lento (segundos), porque a
+/// diferença entre relógios é pequena e constante (dezenas de ppm). Resultado: correção estável,
+/// sem "vibrar" o tom.
 #[derive(Debug, Clone)]
 pub struct Drift {
     target: f64,
+    avg: Option<f64>,
     integral: f64,
     pub ratio: f64,
 }
 
 impl Drift {
     pub fn new(target_frames: f64) -> Drift {
-        Drift { target: target_frames, integral: 0.0, ratio: 1.0 }
+        Drift { target: target_frames, avg: None, integral: 0.0, ratio: 1.0 }
     }
 
-    /// `level` = quadros no buffer agora. Buffer enchendo → consome mais rápido (ratio < 1:
-    /// cada quadro de saída usa um pouco mais de entrada), esvaziando → mais devagar.
+    /// `level` = quadros no buffer agora (chamado a cada bloco convertido, ~190 vezes/s a 48 kHz).
+    /// Buffer sobrando → consome mais rápido; faltando → mais devagar.
     pub fn update(&mut self, level: f64) -> f64 {
-        let err = (level - self.target) / self.target; // positivo = sobrando
-        self.integral = (self.integral + err * 0.002).clamp(-MAX_ADJUST, MAX_ADJUST);
-        let adj = (err * 0.0015 + self.integral).clamp(-MAX_ADJUST, MAX_ADJUST);
+        let avg = match self.avg {
+            None => level,
+            Some(a) => a + (level - a) * 0.01, // média de ~0,5 s
+        };
+        self.avg = Some(avg);
+        let err = ((avg - self.target) / self.target).clamp(-1.0, 1.0);
+        // só proporcional: a fila já soma a diferença ao longo do tempo (é um integrador);
+        // outro integrador aqui faria a correção balançar. Diferença de 100 ppm entre relógios
+        // vira só ~5% de desvio no nível da fila (≈1,5 ms), estável.
+        let adj = (err * 0.002).clamp(-MAX_ADJUST, MAX_ADJUST);
+        self.integral = adj;
         self.ratio = 1.0 / (1.0 + adj);
         self.ratio
     }
@@ -87,6 +101,11 @@ impl Output {
             base_ratio,
             underruns: 0,
         }
+    }
+
+    /// Quadros esperando na fila (lado do fluxo).
+    pub fn queued(&self) -> usize {
+        self.queue.len()
     }
 
     pub fn ratio(&self) -> f64 {
@@ -216,6 +235,26 @@ mod tests {
         assert!((freq - 1000.0).abs() < 25.0, "frequência saiu {freq:.1} Hz");
         let peak = l.iter().fold(0.0f32, |m, v| m.max(v.abs()));
         assert!((peak - 0.5).abs() < 0.05, "volume saiu {peak}");
+    }
+
+    #[test]
+    fn correction_is_steady_not_wobbling() {
+        // mesmo relógio, entrega em blocos de 10 ms: a correção deve ficar perto de zero
+        let mut d = Drift::new(1440.0);
+        let mut level = 1440.0f64;
+        let mut worst: f64 = 0.0;
+        for step in 0..20_000 {
+            if step % 2 == 0 {
+                level += 480.0; // chega um bloco de 10 ms
+            }
+            // o consumo responde à correção (ratio < 1 consome mais entrada por saída)
+            let r = d.update(level);
+            level -= 240.0 / r;
+            if step > 10_000 {
+                worst = worst.max((1.0 / r - 1.0).abs());
+            }
+        }
+        assert!(worst < 0.0005, "correção vibrou {:.4}%", worst * 100.0);
     }
 
     #[test]

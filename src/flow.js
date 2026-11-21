@@ -22,7 +22,7 @@ function serialGraph(n) {
 /// O fluxo é uma fila simples (a lista consegue representar)?
 function isSerial(g, n) {
   if (!g) return true;
-  if (g.nodes.some((x) => x.kind === "mixer") || g.edges.length !== n + 1) return false;
+  if (g.nodes.some((x) => x.kind === "mixer" || x.kind === "send") || g.edges.length !== n + 1) return false;
   let cur = "in";
   for (let i = 0; i <= n; i++) {
     const outs = g.edges.filter((e) => e.from === cur);
@@ -59,6 +59,10 @@ function nodeText(n) {
   if (n.kind === "input") return ["Windows", "som de todos os programas"];
   if (n.kind === "output") return ["Saída", "Surround Rescue + anti-estouro"];
   if (n.kind === "mixer") return ["Mixer", "soma o que chega"];
+  if (n.kind === "send") {
+    const d = PL.devices.find((x) => x.id === n.device);
+    return [`Enviar: ${d ? d.name : "dispositivo"}`, d ? `${d.device} · +~30 ms` : "escolha o dispositivo"];
+  }
   const p = PL.chain.plugins[n.plugin];
   return [p ? baseName(p.path) : "(plugin removido)", p && !p.enabled ? "desligado" : "plugin VST3"];
 }
@@ -136,12 +140,19 @@ function flPanel() {
       h += `<button class="pill solid" id="fl-open">Abrir janela do plugin</button>
         <button class="pill" id="fl-toggle">${p?.enabled ? "Desligar" : "Ligar"}</button>`;
     }
-    if (n.kind === "plugin" || n.kind === "mixer") h += `<button class="pill" id="fl-del-node">Remover caixa</button>`;
+    if (n.kind === "send") {
+      const outs = PL.devices.filter((d) => d.kind === "Saída" && d.id !== PL.device);
+      h += `<div class="field"><div class="flabel"><span>Dispositivo de destino</span></div>
+        <select id="fl-send-dev" style="width:100%">${outs.map((d) => `<option value="${d.id}"${d.id === n.device ? " selected" : ""}>${esc(`${d.name} (${d.device})`)}</option>`).join("")}</select></div>
+        <p class="desc">O som que chega aqui também toca nesse dispositivo, convertido para o formato dele. Fica uns 30 ms atrás do principal.</p>`;
+    }
+    if (n.kind === "plugin" || n.kind === "mixer" || n.kind === "send") h += `<button class="pill" id="fl-del-node">Remover caixa</button>`;
     if (n.kind === "input" || n.kind === "output") h += `<p class="desc">Esta caixa é fixa.</p>`;
     box.innerHTML = h;
     $("#fl-open")?.addEventListener("click", () => flOpen(n));
     $("#fl-toggle")?.addEventListener("click", () => { const p = PL.chain.plugins[n.plugin]; p.enabled = !p.enabled; flChanged(); });
     $("#fl-del-node")?.addEventListener("click", () => flRemoveNode(n));
+    $("#fl-send-dev")?.addEventListener("change", (e) => { n.device = e.target.value; flChanged(); });
   } else {
     box.innerHTML = `<h2>Dicas</h2><p class="desc">Arraste as caixas para organizar. Puxe da bolinha da direita para a da esquerda de outra caixa para ligar. Clique numa seta para mudar o volume dela.</p>
       <p class="desc">Exemplo: ligue o Windows direto na Saída e também num reverb, e o reverb na Saída com 30%. Você ouve o som original com um pouco de reverb.</p>`;
@@ -291,6 +302,15 @@ function flBind() {
     const g = graph();
     const id = `m${Date.now().toString(36)}`;
     g.nodes.push({ id, kind: "mixer", x: 420, y: 320 });
+    FL.sel = { node: id };
+    flChanged();
+  });
+  $("#fl-send").addEventListener("click", () => {
+    const g = graph();
+    const target = PL.devices.find((d) => d.kind === "Saída" && d.id !== PL.device);
+    if (!target) { $("#error").textContent = "Não há outro dispositivo de saída para enviar."; $("#error").hidden = false; return; }
+    const id = `s${Date.now().toString(36)}`;
+    g.nodes.push({ id, kind: "send", device: target.id, x: 440, y: 40 });
     FL.sel = { node: id };
     flChanged();
   });

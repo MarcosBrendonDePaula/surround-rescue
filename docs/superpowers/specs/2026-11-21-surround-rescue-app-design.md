@@ -73,3 +73,11 @@ A lógica de áudio (`eqapo.rs`) já está isolada do motor para permitir a troc
   Delete remove, "Organizar em fila". Lista vira só leitura quando o fluxo não é fila.
 - Ponta a ponta com fluxo paralelo: processado pelo executor (0,15 ms ida e volta).
 - Ainda sem compensação de latência entre ramos (plugins com latência podem defasar caminhos paralelos).
+
+## Motor universal entre dispositivos (2026-11-21)
+- `sr-bridge`: interno float 32 estéreo; por destino: canais (mono/estéreo/7.1, downmix ITU), taxa (sinc, rubato 0.16)
+  e relógio (controle proporcional sobre o nível médio da fila; integrador removido porque oscilava).
+- Testes: 10 min em sincronia com ±100/150 ppm, 48→44,1 kHz mantém tom e volume, correção estável < 0,05%.
+- `sr-host/send.rs`: envio WASAPI compartilhado por eventos; nó `send` no grafo; recusa envio que volte ao dispositivo de origem.
+- Teste real (Realtek, 30 s em tempo real): 0 faltas durante o uso, correção convergindo +0,04% → +0,01%.
+- Falta: nó "Receber de dispositivo" (misturar microfones), medidores de nível.

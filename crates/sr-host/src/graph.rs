@@ -20,6 +20,8 @@ pub enum NodeKind {
     Mixer,
     /// `plugin` = posição na lista `plugins` do arquivo de cadeia
     Plugin { plugin: usize },
+    /// Envia o que chega aqui para outro dispositivo de saída ({guid}); também repassa adiante.
+    Send { device: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -249,6 +251,17 @@ mod tests {
     fn unconnected_output_is_silence() {
         let g = Graph { nodes: vec![node("in", NodeKind::Input), node("out", NodeKind::Output)], edges: vec![] };
         assert_eq!(exec(&g, &[], 1.0), Some(0.0));
+    }
+
+    #[test]
+    fn send_node_passes_sum_through() {
+        let g = Graph {
+            nodes: vec![node("in", NodeKind::Input), node("s", NodeKind::Send { device: "{x}".into() }), node("out", NodeKind::Output)],
+            edges: vec![edge("in", "s", 0.5), edge("s", "out", 1.0)],
+        };
+        assert_eq!(exec(&g, &[], 1.0), Some(0.5));
+        let t = serde_json::to_string(&g).unwrap();
+        assert!(t.contains(r#""kind":"send","device":"{x}""#), "{t}");
     }
 
     #[test]
