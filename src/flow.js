@@ -1,37 +1,49 @@
-// Editor de fluxo: caixas (nós) e setas (ligações) sobre os mesmos dados da aba Plugins.
-// Usa PL, invoke, esc, baseName, $, $$ e plLoadDevices/plLoadChain/plScan de main.js.
+// Editor de fluxo no estilo "editor de nós": tela infinita (arrastar/zoom), cartões por tipo,
+// "+" na saída de cada caixa, ferramentas ao passar o mouse e catálogo lateral com busca.
+// Mesmo formato salvo de antes (graph.nodes / graph.edges). Usa PL, invoke, esc, baseName,
+// fillPct, $, $$ e plLoadDevices/plLoadChain de main.js.
 
-const NODE_W = 160;
-const NODE_H = 56;
-const FL = { sel: null, drag: null, wire: null, timer: null, apps: [] };
+const W = 220, H = 64;
+const FL = {
+  sel: null,          // { node: id } | { edge: índice }
+  drag: null,         // arrastando caixa
+  pan: null,          // arrastando o fundo
+  wire: null,         // puxando seta
+  view: { x: 40, y: 40, z: 1 },
+  timer: null,
+  apps: [],
+  pending: null,      // de onde o catálogo foi aberto: { from } | { edge }
+  scanning: false,
+};
 
 // blocos nativos: nome, unidade, faixa e valor inicial
 const FX = {
-  gain: { name: "Ganho", unit: "dB", min: -60, max: 24, step: 0.5, def: 0 },
-  invert: { name: "Inverter", hint: "somado = subtrai" },
-  pan: { name: "Pan", unit: "", min: -100, max: 100, step: 1, def: 0 },
-  mono: { name: "Mono", hint: "L e R viram um só" },
-  swap: { name: "Trocar L/R", hint: "Inverte os lados" },
-  delay: { name: "Atraso", unit: "ms", min: 0, max: 500, step: 1, def: 50 },
-  lowpass: { name: "Passa-baixa", unit: "Hz", min: 200, max: 20000, step: 50, def: 8000 },
-  highpass: { name: "Passa-alta", unit: "Hz", min: 20, max: 2000, step: 5, def: 120 },
+  gain: { name: "Ganho", unit: "dB", min: -60, max: 24, step: 0.5, def: 0, glyph: "dB", desc: "Aumenta ou diminui o volume" },
+  invert: { name: "Inverter", glyph: "−", desc: "Inverte a fase. Somado com o original, subtrai", hint: "somado = subtrai" },
+  pan: { name: "Pan", unit: "", min: -100, max: 100, step: 1, def: 0, glyph: "↔", desc: "Joga o som para um lado" },
+  mono: { name: "Mono", glyph: "M", desc: "Junta esquerda e direita", hint: "L e R viram um só" },
+  swap: { name: "Trocar L/R", glyph: "⇄", desc: "Inverte os lados", hint: "inverte os lados" },
+  delay: { name: "Atraso", unit: "ms", min: 0, max: 500, step: 1, def: 50, glyph: "⏱", desc: "Atrasa o som (eco, alinhar caminhos)" },
+  lowpass: { name: "Passa-baixa", unit: "Hz", min: 200, max: 20000, step: 50, def: 8000, glyph: "◟", desc: "Corta os agudos" },
+  highpass: { name: "Passa-alta", unit: "Hz", min: 20, max: 2000, step: 5, def: 120, glyph: "◝", desc: "Corta os graves" },
 };
 
+// ---------- dados ----------
 function serialGraph(n) {
-  const nodes = [{ id: "in", kind: "input", x: 30, y: 180 }];
+  const nodes = [{ id: "in", kind: "input", x: 0, y: 160 }];
   const edges = [];
   let prev = "in";
   for (let i = 0; i < n; i++) {
-    nodes.push({ id: `p${i}`, kind: "plugin", plugin: i, x: 230 + 200 * i, y: 180 });
+    nodes.push({ id: `p${i}`, kind: "plugin", plugin: i, x: 300 * (i + 1), y: 160 });
     edges.push({ from: prev, to: `p${i}`, gain: 1 });
     prev = `p${i}`;
   }
-  nodes.push({ id: "out", kind: "output", x: 230 + 200 * n, y: 180 });
+  nodes.push({ id: "out", kind: "output", x: 300 * (n + 1), y: 160 });
   edges.push({ from: prev, to: "out", gain: 1 });
   return { nodes, edges };
 }
 
-/// O fluxo é uma fila simples (a lista consegue representar)?
+/// O fluxo é uma fila simples (a lista da aba Plugins consegue representar)?
 function isSerial(g, n) {
   if (!g) return true;
   if (g.nodes.some((x) => !["input", "output", "plugin"].includes(x.kind)) || g.edges.length !== n + 1) return false;
@@ -55,141 +67,162 @@ function graph() {
 function hasCycle(g) {
   const out = {};
   g.edges.forEach((e) => (out[e.from] = out[e.from] || []).push(e.to));
-  const state = {};
+  const st = {};
   const visit = (id) => {
-    if (state[id] === 1) return true;
-    if (state[id] === 2) return false;
-    state[id] = 1;
-    const cyc = (out[id] || []).some(visit);
-    state[id] = 2;
-    return cyc;
+    if (st[id] === 1) return true;
+    if (st[id] === 2) return false;
+    st[id] = 1;
+    const c = (out[id] || []).some(visit);
+    st[id] = 2;
+    return c;
   };
   return g.nodes.some((n) => visit(n.id));
 }
 
-function nodeText(n) {
-  if (n.kind === "input") return ["Windows", "som de todos os programas"];
-  if (n.kind === "output") return ["Saída", "Surround Rescue + anti-estouro"];
-  if (n.kind === "mixer") return ["Mixer", "soma o que chega"];
-  if (n.kind === "app") return [`Programa: ${n.exe || "?"}`, "som só deste programa"];
-  if (n.kind === "receive") {
-    const d = PL.devices.find((x) => x.id === n.device);
-    return [`Receber: ${d ? d.name : "dispositivo"}`, d ? d.device : "escolha a entrada"];
+const uid = (p) => `${p}${Date.now().toString(36)}${Math.floor(Math.random() * 99)}`;
+const devName = (id) => PL.devices.find((x) => x.id === id);
+
+/// Título, subtítulo e ícone de cada caixa.
+function nodeInfo(n) {
+  switch (n.kind) {
+    case "input": return ["Windows", "som de todos os programas", "♪"];
+    case "output": return ["Saída", "Surround Rescue + anti-estouro", "◉"];
+    case "mixer": return ["Mixer", "soma o que chega", "Σ"];
+    case "app": return [n.exe || "Programa", "som só deste programa", "▶"];
+    case "receive": { const d = devName(n.device); return [d ? d.name : "Entrada", d ? d.device : "escolha a entrada", "🎙"]; }
+    case "send": { const d = devName(n.device); return [d ? `Enviar: ${d.name}` : "Enviar", d ? `${d.device} · ~30 ms depois` : "escolha o destino", "↗"]; }
+    case "fx": { const f = FX[n.fx] || { name: n.fx, glyph: "?" }; return [f.name, f.unit !== undefined ? `${n.value} ${f.unit}`.trim() : f.hint || "bloco nativo", f.glyph]; }
+    case "plugin": {
+      const p = PL.chain.plugins[n.plugin];
+      return [p ? baseName(p.path) : "(plugin removido)", p && !p.enabled ? "desligado" : "plugin VST3", "✦"];
+    }
   }
-  if (n.kind === "fx") {
-    const f = FX[n.fx] || { name: n.fx };
-    return [f.name, f.unit !== undefined ? `${n.value} ${f.unit}`.trim() : f.hint || "bloco nativo"];
-  }
-  if (n.kind === "send") {
-    const d = PL.devices.find((x) => x.id === n.device);
-    return [`Enviar: ${d ? d.name : "dispositivo"}`, d ? `${d.device} · +~30 ms` : "escolha o dispositivo"];
-  }
-  const p = PL.chain.plugins[n.plugin];
-  return [p ? baseName(p.path) : "(plugin removido)", p && !p.enabled ? "desligado" : "plugin VST3"];
+  return [n.kind, "", "?"];
 }
 
-const portIn = (n) => [n.x, n.y + NODE_H / 2];
-const portOut = (n) => [n.x + NODE_W, n.y + NODE_H / 2];
+// ---------- desenho ----------
+const portIn = (n) => [n.x, n.y + H / 2];
+const portOut = (n) => [n.x + W, n.y + H / 2];
 const curve = ([x1, y1], [x2, y2]) => {
-  const dx = Math.max(40, Math.abs(x2 - x1) / 2);
+  const dx = Math.max(50, Math.abs(x2 - x1) / 2);
   return `M${x1} ${y1} C${x1 + dx} ${y1}, ${x2 - dx} ${y2}, ${x2} ${y2}`;
 };
+const trunc = (t, n) => (t.length > n ? t.slice(0, n - 1) + "…" : t);
+const btn = (x, y, label, attrs, cls = "") => `<g class="btn ${cls}" ${attrs} transform="translate(${x} ${y})"><circle r="12"/><text>${label}</text></g>`;
 
 function flRender() {
   const g = graph();
   const svg = $("#fl-canvas");
-  // escala 1:1 (tamanho real); passou da área visível, a caixa rola
-  const area = svg.parentElement;
-  const maxX = Math.max(area.clientWidth, ...g.nodes.map((n) => n.x + NODE_W + 40));
-  const maxY = Math.max(area.clientHeight, ...g.nodes.map((n) => n.y + NODE_H + 40));
-  svg.setAttribute("viewBox", `0 0 ${maxX} ${maxY}`);
-  svg.setAttribute("width", maxX);
-  svg.setAttribute("height", maxY);
+  const v = FL.view;
   const byId = Object.fromEntries(g.nodes.map((n) => [n.id, n]));
-  let s = "";
+  const hasOut = new Set(g.edges.map((e) => e.from));
+  let s = `<g transform="translate(${v.x} ${v.y}) scale(${v.z})">`;
+
   g.edges.forEach((e, i) => {
     const a = byId[e.from], b = byId[e.to];
     if (!a || !b) return;
-    const d = curve(portOut(a), portIn(b));
+    const p1 = portOut(a), p2 = portIn(b);
+    const d = curve(p1, p2);
     const sel = FL.sel?.edge === i;
-    s += `<path class="edge${sel ? " sel" : ""}${e.gain < 0.999 ? " weak" : ""}" d="${d}"/>`;
-    s += `<path class="hit" data-edge="${i}" d="${d}"><title>Clique para ajustar ou remover a ligação</title></path>`;
-    if (Math.abs(e.gain - 1) > 0.001) {
-      const [x1, y1] = portOut(a), [x2, y2] = portIn(b);
-      s += `<text class="gain" x="${(x1 + x2) / 2}" y="${(y1 + y2) / 2 - 8}">${Math.round(e.gain * 100)}%</text>`;
-    }
+    const mx = (p1[0] + p2[0]) / 2, my = (p1[1] + p2[1]) / 2;
+    s += `<g class="edge-g${sel ? " sel" : ""}">
+      <path class="edge live${sel ? " sel" : ""}" d="${d}"/>
+      <path class="hit" data-edge="${i}" d="${d}"/>
+      ${Math.abs(e.gain - 1) > 0.001 ? `<text class="gain" x="${mx}" y="${my - 20}">${Math.round(e.gain * 100)}%</text>` : ""}
+      <g class="edge-tools">${btn(mx - 15, my, "+", `data-edge-add="${i}"`)}${btn(mx + 15, my, "🗑", `data-edge-del="${i}"`, "danger")}</g>
+    </g>`;
   });
+
   for (const n of g.nodes) {
-    const [t, sub] = nodeText(n);
+    const [title, sub, glyph] = nodeInfo(n);
     const p = n.kind === "plugin" ? PL.chain.plugins[n.plugin] : null;
-    const cls = `node ${n.kind}${FL.sel?.node === n.id ? " sel" : ""}${p && !p.enabled ? " off" : ""}`;
+    const cls = `node k-${n.kind}${FL.sel?.node === n.id ? " sel" : ""}${p && !p.enabled ? " off" : ""}`;
+    const tools = [];
+    if (n.kind === "plugin") {
+      tools.push([`▣`, `data-tool="open" data-id="${esc(n.id)}"`, ""]);
+      tools.push([`⏻`, `data-tool="toggle" data-id="${esc(n.id)}"`, ""]);
+    }
+    if (!["input", "output"].includes(n.kind)) tools.push([`🗑`, `data-tool="del" data-id="${esc(n.id)}"`, "danger"]);
+    const toolsSvg = tools.map(([l, a, c], k) => btn(W - 14 - 28 * (tools.length - 1 - k), -18, l, a, c)).join("");
     s += `<g class="${cls}" data-node="${esc(n.id)}" transform="translate(${n.x} ${n.y})">
-      <rect class="box" width="${NODE_W}" height="${NODE_H}" rx="10"/>
-      <text class="title" x="14" y="23">${esc(t.length > 18 ? t.slice(0, 17) + "…" : t)}</text>
-      <text class="sub" x="14" y="41">${esc(sub)}</text>
-      ${!["input", "app", "receive"].includes(n.kind) ? `<circle class="port in" data-port-in="${esc(n.id)}" cx="0" cy="${NODE_H / 2}" r="7"/>` : ""}
-      ${n.kind !== "output" ? `<circle class="port out" data-port-out="${esc(n.id)}" cx="${NODE_W}" cy="${NODE_H / 2}" r="7"/>` : ""}
+      <rect class="card" width="${W}" height="${H}" rx="12"/>
+      <rect class="stripe" x="0" y="12" width="4" height="${H - 24}" rx="2"/>
+      <rect class="badge" x="14" y="12" width="40" height="40" rx="10"/>
+      <text class="glyph" x="34" y="32">${glyph}</text>
+      <text class="title" x="66" y="28">${esc(trunc(title, 20))}</text>
+      <text class="sub" x="66" y="46">${esc(trunc(sub, 26))}</text>
+      ${!["input", "app", "receive"].includes(n.kind) ? `<circle class="port in" data-port-in="${esc(n.id)}" cx="0" cy="${H / 2}" r="7"/>` : ""}
+      ${n.kind !== "output" ? `<circle class="port out" data-port-out="${esc(n.id)}" cx="${W}" cy="${H / 2}" r="7"/>` : ""}
+      ${n.kind !== "output" && !hasOut.has(n.id) ? `<g class="plus" data-plus="${esc(n.id)}"><line x1="${W + 7}" y1="${H / 2}" x2="${W + 34}" y2="${H / 2}"/><rect x="${W + 34}" y="${H / 2 - 13}" width="26" height="26" rx="7"/><text x="${W + 47}" y="${H / 2}">+</text></g>` : ""}
+      <g class="tools">${toolsSvg}</g>
     </g>`;
   }
   if (FL.wire) s += `<path class="wire" d="${curve(FL.wire.from, FL.wire.to)}"/>`;
+  s += "</g>";
   svg.innerHTML = s;
-  flPanel();
+  $("#fl-hint").hidden = g.nodes.length > 3;
 }
 
+// ---------- painel de propriedades ----------
 function flPanel() {
   const g = graph();
   const box = $("#fl-panel");
-  if (FL.sel?.edge !== undefined) {
+  if (!FL.sel) { box.hidden = true; return; }
+  $("#fl-creator").hidden = true;
+  box.hidden = false;
+  let h = "";
+  if (FL.sel.edge !== undefined) {
     const e = g.edges[FL.sel.edge];
     if (!e) { FL.sel = null; return flPanel(); }
-    const name = (id) => nodeText(g.nodes.find((n) => n.id === id) || {})[0];
-    box.innerHTML = `<h2>Ligação</h2><p class="desc">${esc(name(e.from))} → ${esc(name(e.to))}</p>
+    const name = (id) => nodeInfo(g.nodes.find((n) => n.id === id) || { kind: "?" })[0];
+    h = `<div class="fl-drawer-head"><h2>Ligação</h2><button class="icon" data-close>×</button></div>
+      <p class="desc">${esc(name(e.from))} → ${esc(name(e.to))}</p>
       <div class="field"><div class="flabel"><span>Volume</span><output id="fl-gain-v">${Math.round(e.gain * 100)}%</output></div>
       <input type="range" id="fl-gain" min="0" max="200" step="1" value="${Math.round(e.gain * 100)}"></div>
       <button class="pill" id="fl-del-edge">Remover ligação</button>`;
+    box.innerHTML = h;
     const r = $("#fl-gain");
     fillPct(r);
-    r.addEventListener("input", () => { e.gain = Number(r.value) / 100; $("#fl-gain-v").textContent = `${r.value}%`; fillPct(r); flSaveSoon(); flRenderEdgesOnly(); });
-    $("#fl-del-edge").addEventListener("click", () => { g.edges.splice(FL.sel.edge, 1); FL.sel = null; flChanged(); });
-  } else if (FL.sel?.node) {
+    r.addEventListener("input", () => { e.gain = Number(r.value) / 100; $("#fl-gain-v").textContent = `${r.value}%`; fillPct(r); flSaveSoon(); flRender(); });
+    $("#fl-del-edge").addEventListener("click", () => { g.edges.splice(FL.sel.edge, 1); FL.sel = null; flChanged(); flPanel(); });
+  } else {
     const n = g.nodes.find((x) => x.id === FL.sel.node);
     if (!n) { FL.sel = null; return flPanel(); }
-    const [t, sub] = nodeText(n);
-    let h = `<h2>${esc(t)}</h2><p class="desc">${esc(sub)}</p>`;
+    const [t, sub] = nodeInfo(n);
+    h = `<div class="fl-drawer-head"><h2>${esc(trunc(t, 24))}</h2><button class="icon" data-close>×</button></div><p class="desc">${esc(sub)}</p>`;
     if (n.kind === "plugin") {
       const p = PL.chain.plugins[n.plugin];
-      h += `<button class="pill solid" id="fl-open">Abrir janela do plugin</button>
-        <button class="pill" id="fl-toggle">${p?.enabled ? "Desligar" : "Ligar"}</button>`;
+      h += `<button class="pill solid" id="fl-open">Abrir janela do plugin</button><button class="pill" id="fl-toggle">${p?.enabled ? "Desligar" : "Ligar"}</button>`;
     }
     if (n.kind === "send") {
       const outs = PL.devices.filter((d) => d.kind === "Saída" && d.id !== PL.device);
       h += `<div class="field"><div class="flabel"><span>Dispositivo de destino</span></div>
-        <select id="fl-send-dev" style="width:100%">${outs.map((d) => `<option value="${d.id}"${d.id === n.device ? " selected" : ""}>${esc(`${d.name} (${d.device})`)}</option>`).join("")}</select></div>
+        <select id="fl-send-dev">${outs.map((d) => `<option value="${d.id}"${d.id === n.device ? " selected" : ""}>${esc(`${d.name} (${d.device})`)}</option>`).join("")}</select></div>
         <p class="desc">O som que chega aqui também toca nesse dispositivo, convertido para o formato dele. Fica uns 30 ms atrás do principal.</p>`;
     }
     if (n.kind === "app") {
       h += `<div class="field"><div class="flabel"><span>Programa (.exe)</span></div>
-        <input type="text" id="fl-app-exe" value="${esc(n.exe || "")}" list="fl-app-list" style="width:100%">
+        <input type="text" id="fl-app-exe" value="${esc(n.exe || "")}" list="fl-app-list">
         <datalist id="fl-app-list">${FL.apps.map((a) => `<option value="${esc(a)}">`).join("")}</datalist></div>
-        <p class="desc">Sugestões: programas tocando som agora. A captura é uma cópia: o programa continua tocando onde estava. Para ouvir só a versão processada, aponte o programa para outra saída nas configurações de som do Windows.</p>`;
+        <p class="desc">A captura é uma cópia: o programa continua tocando onde estava. Para ouvir só a versão processada, aponte o programa para outra saída nas configurações de som do Windows.</p>`;
     }
     if (n.kind === "receive") {
       const ins = PL.devices.filter((d) => d.kind === "Microfone" && d.id !== PL.device);
       h += `<div class="field"><div class="flabel"><span>Entrada</span></div>
-        <select id="fl-recv-dev" style="width:100%">${ins.map((d) => `<option value="${d.id}"${d.id === n.device ? " selected" : ""}>${esc(`${d.name} (${d.device})`)}</option>`).join("")}</select></div>`;
+        <select id="fl-recv-dev">${ins.map((d) => `<option value="${d.id}"${d.id === n.device ? " selected" : ""}>${esc(`${d.name} (${d.device})`)}</option>`).join("")}</select></div>`;
     }
     if (n.kind === "fx") {
       const f = FX[n.fx];
       if (f && f.unit !== undefined) {
         h += `<div class="field"><div class="flabel"><span>${esc(f.name)}</span><output id="fl-fx-v">${n.value} ${f.unit}</output></div>
           <input type="range" id="fl-fx-val" min="${f.min}" max="${f.max}" step="${f.step}" value="${n.value}"></div>`;
-      } else if (f) h += `<p class="desc">${esc(f.hint)}</p>`;
+      } else if (f) h += `<p class="desc">${esc(f.desc)}</p>`;
     }
-    if (!["input", "output"].includes(n.kind)) h += `<button class="pill" id="fl-del-node">Remover caixa</button>`;
-    if (n.kind === "input" || n.kind === "output") h += `<p class="desc">Esta caixa é fixa.</p>`;
+    if (["input", "output"].includes(n.kind)) h += `<p class="desc">Esta caixa é fixa.</p>`;
+    else h += `<button class="pill" id="fl-del-node">Remover caixa</button>`;
     box.innerHTML = h;
     $("#fl-open")?.addEventListener("click", () => flOpen(n));
-    $("#fl-toggle")?.addEventListener("click", () => { const p = PL.chain.plugins[n.plugin]; p.enabled = !p.enabled; flChanged(); });
+    $("#fl-toggle")?.addEventListener("click", () => { const p = PL.chain.plugins[n.plugin]; p.enabled = !p.enabled; flChanged(); flPanel(); });
     $("#fl-del-node")?.addEventListener("click", () => flRemoveNode(n));
     $("#fl-send-dev")?.addEventListener("change", (e) => { n.device = e.target.value; flChanged(); });
     $("#fl-recv-dev")?.addEventListener("change", (e) => { n.device = e.target.value; flChanged(); });
@@ -197,23 +230,116 @@ function flPanel() {
     const fv = $("#fl-fx-val");
     if (fv) {
       fillPct(fv);
-      fv.addEventListener("input", () => { n.value = Number(fv.value); $("#fl-fx-v").textContent = `${n.value} ${FX[n.fx].unit}`; fillPct(fv); flSaveSoon(); flRenderEdgesOnly(); });
+      fv.addEventListener("input", () => { n.value = Number(fv.value); $("#fl-fx-v").textContent = `${n.value} ${FX[n.fx].unit}`; fillPct(fv); flSaveSoon(); flRender(); });
     }
-  } else {
-    box.innerHTML = `<h2>Dicas</h2><p class="desc">Arraste as caixas para organizar. Puxe da bolinha da direita para a da esquerda de outra caixa para ligar. Clique numa seta para mudar o volume dela.</p>
-      <p class="desc">Exemplo: ligue o Windows direto na Saída e também num reverb, e o reverb na Saída com 30%. Você ouve o som original com um pouco de reverb.</p>`;
   }
+  box.querySelector("[data-close]")?.addEventListener("click", () => { FL.sel = null; flRender(); flPanel(); });
 }
 
-function flRenderEdgesOnly() {
-  // re-render barato durante o arrasto do volume
-  const keep = FL.sel;
+// ---------- catálogo ----------
+async function flOpenCreator(pending) {
+  FL.pending = pending || null;
+  FL.sel = null;
+  $("#fl-panel").hidden = true;
+  $("#fl-creator").hidden = false;
+  $("#fl-creator-title").textContent = pending ? "Adicionar e ligar" : "Adicionar caixa";
+  $("#fl-search").value = "";
   flRender();
-  FL.sel = keep;
+  flCatalog();
+  $("#fl-search").focus();
+  // buscas lentas só aqui, uma vez, em segundo plano (não travam a tela)
+  if (!PL.found.length && !FL.scanning) {
+    FL.scanning = true;
+    flCatalog();
+    try { PL.found = await invoke("scan_plugins"); } catch (e) { PL.found = []; }
+    FL.scanning = false;
+    if (!$("#fl-creator").hidden) flCatalog();
+  }
+  invoke("audio_apps").then((a) => { FL.apps = a; if (!$("#fl-creator").hidden) flCatalog(); }).catch(() => {});
 }
+
+function catalogItems() {
+  const outs = PL.devices.filter((d) => d.kind === "Saída" && d.id !== PL.device);
+  const ins = PL.devices.filter((d) => d.kind === "Microfone" && d.id !== PL.device);
+  return [
+    ["Entradas", [
+      ...FL.apps.map((a) => ({ k: "app", ic: "▶", t: a, d: "Som só deste programa (tocando agora)", node: { kind: "app", exe: a } })),
+      { k: "app", ic: "▶", t: "Capturar programa…", d: "Escolha o .exe depois", node: { kind: "app", exe: "" } },
+      ...ins.map((d) => ({ k: "app", ic: "🎙", t: d.name, d: `Receber de ${d.device}`, node: { kind: "receive", device: d.id } })),
+    ]],
+    ["Efeitos nativos", Object.entries(FX).map(([id, f]) => ({ k: "fx", ic: f.glyph, t: f.name, d: f.desc, node: { kind: "fx", fx: id, value: f.def ?? 0 } }))],
+    ["Plugins VST", FL.scanning && !PL.found.length
+      ? [{ k: "plugin", ic: "…", t: "Procurando plugins…", d: "só na primeira vez", node: null }]
+      : PL.found.map((f) => ({ k: "plugin", ic: "✦", t: f.name || baseName(f.path), d: "plugin VST3", plugin: f.path }))],
+    ["Saídas", outs.map((d) => ({ k: "send", ic: "↗", t: `Enviar: ${d.name}`, d: d.device, node: { kind: "send", device: d.id } }))],
+    ["Utilitários", [{ k: "mixer", ic: "Σ", t: "Mixer", d: "Soma vários caminhos", node: { kind: "mixer" } }]],
+  ];
+}
+
+function flCatalog() {
+  const q = $("#fl-search").value.trim().toLowerCase();
+  let html = "";
+  let idx = 0;
+  FL.catalog = [];
+  for (const [cat, items] of catalogItems()) {
+    const vis = items.filter((it) => !q || `${it.t} ${it.d} ${cat}`.toLowerCase().includes(q));
+    if (!vis.length) continue;
+    html += `<h3>${esc(cat)}</h3>`;
+    for (const it of vis) {
+      FL.catalog.push(it);
+      html += `<button class="fl-item k-${it.k}" data-cat="${idx++}"><span class="ic">${esc(it.ic)}</span><span><b>${esc(trunc(it.t, 30))}</b><small>${esc(it.d)}</small></span></button>`;
+    }
+  }
+  $("#fl-catalog").innerHTML = html || `<p class="desc">Nada encontrado para "${esc(q)}".</p>`;
+}
+
+/// Cria a caixa escolhida no catálogo, já ligada quando veio de um "+".
+function flCreate(it) {
+  if (!it || (!it.node && !it.plugin)) return;
+  const g = graph();
+  let node;
+  if (it.plugin) {
+    PL.chain.plugins.push({ path: it.plugin, enabled: true });
+    node = { id: uid("p"), kind: "plugin", plugin: PL.chain.plugins.length - 1 };
+  } else {
+    node = { id: uid(it.node.kind[0]), ...it.node };
+  }
+  const p = FL.pending;
+  if (p?.from) {
+    const a = g.nodes.find((x) => x.id === p.from);
+    Object.assign(node, { x: a.x + W + 80, y: a.y });
+    g.nodes.push(node);
+    // entradas (programa/dispositivo) não recebem seta: só aparecem soltas
+    if (!["app", "receive"].includes(node.kind)) g.edges.push({ from: p.from, to: node.id, gain: 1 });
+  } else if (p?.edge !== undefined) {
+    // insere no meio da seta: A → novo → B
+    const e = g.edges[p.edge];
+    const a = g.nodes.find((x) => x.id === e.from), b = g.nodes.find((x) => x.id === e.to);
+    Object.assign(node, { x: Math.round((a.x + b.x) / 2), y: Math.round((a.y + b.y) / 2) + 100 });
+    g.nodes.push(node);
+    if (!["app", "receive"].includes(node.kind)) g.edges.splice(p.edge, 1, { from: e.from, to: node.id, gain: e.gain }, { from: node.id, to: e.to, gain: 1 });
+  } else {
+    // no centro da área visível
+    const r = $("#fl-canvas").getBoundingClientRect(), v = FL.view;
+    Object.assign(node, { x: Math.round((r.width / 2 - v.x) / v.z - W / 2), y: Math.round((r.height / 2 - v.y) / v.z - H / 2) });
+    g.nodes.push(node);
+  }
+  if (hasCycle(g)) {
+    g.nodes.pop();
+    return flError("Essa ligação faria o som andar em círculo.");
+  }
+  $("#fl-creator").hidden = true;
+  FL.pending = null;
+  FL.sel = { node: node.id };
+  flChanged();
+  flPanel();
+}
+
+// ---------- ações ----------
+function flError(msg) { $("#error").textContent = msg; $("#error").hidden = false; }
 
 function flOpen(n) {
-  invoke("open_plugin_window", { endpoint: PL.device, index: n.plugin }).catch((err) => { $("#error").textContent = String(err); $("#error").hidden = false; });
+  invoke("open_plugin_window", { endpoint: PL.device, index: n.plugin }).catch((e) => flError(String(e)));
 }
 
 function flRemoveNode(n) {
@@ -226,12 +352,10 @@ function flRemoveNode(n) {
   }
   FL.sel = null;
   flChanged();
+  flPanel();
 }
 
-function flChanged() {
-  flRender();
-  flSaveSoon();
-}
+function flChanged() { flRender(); flSaveSoon(); }
 
 function flSaveSoon() {
   clearTimeout(FL.timer);
@@ -239,171 +363,183 @@ function flSaveSoon() {
     try {
       await invoke("set_chain", { endpoint: PL.device, chain: PL.chain });
       $("#error").hidden = true;
-      const t = new Date().toLocaleTimeString("pt-BR");
-      $("#fl-saved").textContent = `Salvo ✓ às ${t}`;
+      $("#fl-saved").textContent = `Salvo ✓ ${new Date().toLocaleTimeString("pt-BR")}`;
     } catch (e) {
-      $("#error").textContent = String(e); $("#error").hidden = false;
-      $("#fl-saved").textContent = "Não foi possível salvar (veja a mensagem em vermelho)";
+      flError(String(e));
+      $("#fl-saved").textContent = "Não salvou";
     }
   }, 250);
 }
 
-function svgPoint(ev) {
-  const svg = $("#fl-canvas");
-  const pt = svg.createSVGPoint();
-  pt.x = ev.clientX; pt.y = ev.clientY;
-  const p = pt.matrixTransform(svg.getScreenCTM().inverse());
-  return [p.x, p.y];
+/// Ponto do mouse em coordenadas do mundo (desfaz arrasto e zoom da tela).
+function worldPoint(ev) {
+  const r = $("#fl-canvas").getBoundingClientRect(), v = FL.view;
+  return [(ev.clientX - r.left - v.x) / v.z, (ev.clientY - r.top - v.y) / v.z];
 }
 
+function flZoom(factor, cx, cy) {
+  const v = FL.view;
+  const r = $("#fl-canvas").getBoundingClientRect();
+  cx ??= r.width / 2;
+  cy ??= r.height / 2;
+  const z = Math.min(2, Math.max(0.3, v.z * factor));
+  v.x = cx - ((cx - v.x) * z) / v.z;
+  v.y = cy - ((cy - v.y) * z) / v.z;
+  v.z = z;
+  flRender();
+}
+
+function flFit() {
+  const g = graph();
+  const r = $("#fl-canvas").getBoundingClientRect();
+  if (!g.nodes.length || !r.width) return;
+  const xs = g.nodes.map((n) => n.x), ys = g.nodes.map((n) => n.y);
+  const minX = Math.min(...xs) - 60, maxX = Math.max(...xs) + W + 90, minY = Math.min(...ys) - 60, maxY = Math.max(...ys) + H + 60;
+  const z = Math.min(1.2, Math.max(0.3, Math.min(r.width / (maxX - minX), r.height / (maxY - minY))));
+  FL.view = { z, x: (r.width - (maxX - minX) * z) / 2 - minX * z, y: (r.height - (maxY - minY) * z) / 2 - minY * z };
+  flRender();
+}
+
+// ---------- eventos ----------
 function flBind() {
   const svg = $("#fl-canvas");
   svg.addEventListener("pointerdown", (ev) => {
     const g = graph();
     const t = ev.target;
+    const tool = t.closest("[data-tool]"), plus = t.closest("[data-plus]");
+    const eAdd = t.closest("[data-edge-add]"), eDel = t.closest("[data-edge-del]");
+    if (tool) {
+      const n = g.nodes.find((x) => x.id === tool.dataset.id);
+      if (tool.dataset.tool === "open") flOpen(n);
+      if (tool.dataset.tool === "toggle") { const p = PL.chain.plugins[n.plugin]; p.enabled = !p.enabled; flChanged(); }
+      if (tool.dataset.tool === "del") flRemoveNode(n);
+      return;
+    }
+    if (plus) return flOpenCreator({ from: plus.dataset.plus });
+    if (eAdd) return flOpenCreator({ edge: Number(eAdd.dataset.edgeAdd) });
+    if (eDel) { g.edges.splice(Number(eDel.dataset.edgeDel), 1); FL.sel = null; flChanged(); flPanel(); return; }
     if (t.dataset.portOut) {
       const n = g.nodes.find((x) => x.id === t.dataset.portOut);
-      FL.wire = { id: n.id, from: portOut(n), to: svgPoint(ev) };
+      FL.wire = { id: n.id, from: portOut(n), to: worldPoint(ev) };
       svg.setPointerCapture(ev.pointerId);
       return;
     }
     const nodeEl = t.closest("[data-node]");
     if (nodeEl && !t.dataset.portIn) {
       const n = g.nodes.find((x) => x.id === nodeEl.dataset.node);
-      const [px, py] = svgPoint(ev);
+      const [px, py] = worldPoint(ev);
       FL.drag = { n, dx: px - n.x, dy: py - n.y, moved: false };
       FL.sel = { node: n.id };
       svg.setPointerCapture(ev.pointerId);
       flRender();
+      flPanel();
       return;
     }
     if (t.dataset.edge !== undefined) {
       FL.sel = { edge: Number(t.dataset.edge) };
       flRender();
+      flPanel();
       return;
     }
-    FL.sel = null;
-    flRender();
+    // fundo: arrastar a tela
+    FL.pan = { x: ev.clientX, y: ev.clientY, vx: FL.view.x, vy: FL.view.y, moved: false };
+    svg.classList.add("panning");
+    svg.setPointerCapture(ev.pointerId);
   });
   svg.addEventListener("pointermove", (ev) => {
     if (FL.drag) {
-      const [px, py] = svgPoint(ev);
-      FL.drag.n.x = Math.max(0, Math.round((px - FL.drag.dx) / 10) * 10);
-      FL.drag.n.y = Math.max(0, Math.round((py - FL.drag.dy) / 10) * 10);
+      const [px, py] = worldPoint(ev);
+      FL.drag.n.x = Math.round((px - FL.drag.dx) / 10) * 10;
+      FL.drag.n.y = Math.round((py - FL.drag.dy) / 10) * 10;
       FL.drag.moved = true;
       flRender();
     } else if (FL.wire) {
-      FL.wire.to = svgPoint(ev);
+      FL.wire.to = worldPoint(ev);
       flRender();
-      // destaca a entrada sob o cursor
       const el = document.elementFromPoint(ev.clientX, ev.clientY);
       if (el?.dataset?.portIn) el.classList.add("target");
+    } else if (FL.pan) {
+      FL.view.x = FL.pan.vx + ev.clientX - FL.pan.x;
+      FL.view.y = FL.pan.vy + ev.clientY - FL.pan.y;
+      FL.pan.moved = true;
+      flRender();
     }
   });
   svg.addEventListener("pointerup", (ev) => {
-    if (FL.drag) {
-      if (FL.drag.moved) flSaveSoon();
-      FL.drag = null;
+    if (FL.drag) { if (FL.drag.moved) flSaveSoon(); FL.drag = null; }
+    if (FL.pan) {
+      if (!FL.pan.moved && FL.sel) { FL.sel = null; flRender(); flPanel(); } // clique no fundo: deseleciona
+      FL.pan = null;
+      svg.classList.remove("panning");
     }
     if (FL.wire) {
       const el = document.elementFromPoint(ev.clientX, ev.clientY);
       const to = el?.dataset?.portIn;
       const g = graph();
-      if (to && to !== FL.wire.id && !g.edges.some((e) => e.from === FL.wire.id && e.to === to)) {
-        g.edges.push({ from: FL.wire.id, to, gain: 1 });
-        if (hasCycle(g)) {
-          g.edges.pop();
-          $("#error").textContent = "Essa ligação faria o som andar em círculo. Ligue para uma caixa mais à frente.";
-          $("#error").hidden = false;
-        } else {
-          FL.sel = { edge: g.edges.length - 1 };
-          flSaveSoon();
-        }
-      }
+      const from = FL.wire.id;
       FL.wire = null;
-      flRender();
+      if (to && to !== from && !g.edges.some((e) => e.from === from && e.to === to)) {
+        g.edges.push({ from, to, gain: 1 });
+        if (hasCycle(g)) { g.edges.pop(); flError("Essa ligação faria o som andar em círculo. Ligue para uma caixa mais à frente."); }
+        else { FL.sel = { edge: g.edges.length - 1 }; flSaveSoon(); flPanel(); }
+        flRender();
+      } else if (!to) {
+        // soltou no vazio: abre o catálogo para criar a próxima caixa já ligada
+        flRender();
+        flOpenCreator({ from });
+      } else flRender();
     }
   });
+  svg.addEventListener("wheel", (ev) => {
+    ev.preventDefault();
+    const r = svg.getBoundingClientRect();
+    flZoom(ev.deltaY < 0 ? 1.1 : 1 / 1.1, ev.clientX - r.left, ev.clientY - r.top);
+  }, { passive: false });
   svg.addEventListener("dblclick", (ev) => {
     const nodeEl = ev.target.closest("[data-node]");
     const n = nodeEl && graph().nodes.find((x) => x.id === nodeEl.dataset.node);
     if (n?.kind === "plugin") flOpen(n);
   });
   document.addEventListener("keydown", (ev) => {
-    if (!$("#tab-fluxo").classList.contains("active") || ev.key !== "Delete" || !FL.sel) return;
+    if (!$("#tab-fluxo").classList.contains("active") || ["INPUT", "SELECT"].includes(document.activeElement?.tagName)) return;
+    if (ev.key === "Escape") { $("#fl-creator").hidden = true; FL.sel = null; flRender(); flPanel(); }
+    if (ev.key !== "Delete" || !FL.sel) return;
     const g = graph();
-    if (FL.sel.edge !== undefined) { g.edges.splice(FL.sel.edge, 1); FL.sel = null; flChanged(); }
-    else if (FL.sel.node) {
+    if (FL.sel.edge !== undefined) { g.edges.splice(FL.sel.edge, 1); FL.sel = null; flChanged(); flPanel(); }
+    else {
       const n = g.nodes.find((x) => x.id === FL.sel.node);
-      if (n && (n.kind === "plugin" || n.kind === "mixer")) flRemoveNode(n);
+      if (n && !["input", "output"].includes(n.kind)) flRemoveNode(n);
     }
   });
 
-  $("#fl-add").addEventListener("click", () => {
-    const f = PL.found[Number($("#fl-found").value)];
-    if (!f) return;
-    const g = graph();
-    PL.chain.plugins.push({ path: f.path, enabled: true });
-    const id = `p${Date.now().toString(36)}`;
-    g.nodes.push({ id, kind: "plugin", plugin: PL.chain.plugins.length - 1, x: 260, y: 40 + 70 * (g.nodes.length % 5) });
-    FL.sel = { node: id };
-    flChanged();
+  $("#fl-fit").addEventListener("click", flFit);
+  $("#fl-zin").addEventListener("click", () => flZoom(1.2));
+  $("#fl-zout").addEventListener("click", () => flZoom(1 / 1.2));
+  $("#fl-open-creator").addEventListener("click", () => flOpenCreator(null));
+  $("#fl-creator-close").addEventListener("click", () => { $("#fl-creator").hidden = true; FL.pending = null; });
+  $("#fl-search").addEventListener("input", flCatalog);
+  $("#fl-search").addEventListener("keydown", (ev) => { if (ev.key === "Enter") flCreate(FL.catalog?.[0]); });
+  $("#fl-catalog").addEventListener("click", (ev) => {
+    const b = ev.target.closest("[data-cat]");
+    if (b) flCreate(FL.catalog[Number(b.dataset.cat)]);
   });
-  $("#fl-mixer").addEventListener("click", () => {
-    const g = graph();
-    const id = `m${Date.now().toString(36)}`;
-    g.nodes.push({ id, kind: "mixer", x: 420, y: 320 });
-    FL.sel = { node: id };
-    flChanged();
-  });
-  $("#fl-send").addEventListener("click", () => {
-    const g = graph();
-    const target = PL.devices.find((d) => d.kind === "Saída" && d.id !== PL.device);
-    if (!target) { $("#error").textContent = "Não há outro dispositivo de saída para enviar."; $("#error").hidden = false; return; }
-    const id = `s${Date.now().toString(36)}`;
-    g.nodes.push({ id, kind: "send", device: target.id, x: 440, y: 40 });
-    FL.sel = { node: id };
-    flChanged();
-  });
-  const addNode = (node) => {
-    const g = graph();
-    g.nodes.push({ x: 40, y: 300, ...node });
-    FL.sel = { node: node.id };
-    flChanged();
-  };
-  $("#fl-app").addEventListener("click", async () => {
-    try { FL.apps = await invoke("audio_apps"); } catch (e) { FL.apps = []; }
-    addNode({ id: `a${Date.now().toString(36)}`, kind: "app", exe: FL.apps[0] || "" });
-  });
-  $("#fl-recv").addEventListener("click", () => {
-    const d = PL.devices.find((x) => x.kind === "Microfone" && x.id !== PL.device);
-    if (!d) { $("#error").textContent = "Não há outra entrada de áudio para receber."; $("#error").hidden = false; return; }
-    addNode({ id: `r${Date.now().toString(36)}`, kind: "receive", device: d.id });
-  });
-  $("#fl-addfx").addEventListener("click", () => {
-    const fx = $("#fl-fx").value;
-    addNode({ id: `f${Date.now().toString(36)}`, kind: "fx", fx, value: FX[fx].def ?? 0, x: 240, y: 300 });
-  });
-  $("#fl-serial").addEventListener("click", () => {
-    PL.chain.graph = serialGraph(PL.chain.plugins.length);
-    FL.sel = null;
-    flChanged();
-  });
+  $("#fl-serial").addEventListener("click", () => { PL.chain.graph = serialGraph(PL.chain.plugins.length); FL.sel = null; flChanged(); flPanel(); flFit(); });
   $("#fl-device").addEventListener("change", async (e) => {
     PL.device = e.target.value;
     await plLoadChain();
     FL.sel = null;
-    flRender();
+    flPanel();
+    flFit();
   });
+  // abrir a aba: só dados rápidos (dispositivos e fluxo); plugins são buscados ao abrir o catálogo
   $$("#tabs button").forEach((b) => b.addEventListener("click", async () => {
     if (b.dataset.tab !== "fluxo") return;
     await plLoadDevices();
     $("#fl-device").innerHTML = $("#pl-device").innerHTML;
     $("#fl-device").value = PL.device;
     await plLoadChain();
-    if (!PL.found.length) await plScan();
-    $("#fl-found").innerHTML = $("#pl-found").innerHTML;
     flRender();
+    requestAnimationFrame(flFit);
   }));
 }
 flBind();

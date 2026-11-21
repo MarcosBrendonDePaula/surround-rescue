@@ -42,7 +42,7 @@ pub fn pick(list: &[Device], chosen: Option<&str>) -> Option<Device> {
             return Some(d.clone());
         }
     }
-    let mut with_apo: Vec<&Device> = list.iter().filter(|d| d.apo).collect();
+    let mut with_apo: Vec<&Device> = list.iter().filter(|d| d.apo && d.connected).collect();
     with_apo.sort_by_key(|d| !d.device.contains("Kraken"));
     with_apo.first().cloned().cloned()
 }

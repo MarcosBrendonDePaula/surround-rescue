@@ -186,33 +186,89 @@ pre { white-space: pre-wrap; font-size: 11.5px; color: var(--soft); background: 
 .chain li.dragging { opacity: .4; }
 .chain li.drop-here { outline: 2px dashed var(--amber); outline-offset: 2px; }
 
-/* fluxo */
-.fl-toolbar { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
-.fl-wrap { display: grid; grid-template-columns: 1fr 230px; gap: 12px; }
-@media (max-width: 860px) { .fl-wrap { grid-template-columns: 1fr; } }
-.fl-scroll { overflow: auto; height: 480px; border-radius: 12px; background: var(--surface); }
-#fl-canvas { display: block; touch-action: none; user-select: none;
-  background-image: radial-gradient(var(--line) 1px, transparent 1px); background-size: 22px 22px; }
-#fl-canvas .edge { fill: none; stroke: var(--amber); stroke-width: 2.5; stroke-dasharray: 7 6; animation: fl-flow 0.9s linear infinite; }
-#fl-canvas .edge.sel { stroke-width: 4.5; }
-#fl-canvas .edge.weak { opacity: .55; }
-#fl-canvas .hit { fill: none; stroke: transparent; stroke-width: 14; cursor: pointer; }
-#fl-canvas .wire { fill: none; stroke: var(--amber); stroke-width: 2; stroke-dasharray: 3 4; opacity: .8; }
-#fl-canvas .gain { fill: var(--amber); font: 600 11px var(--display); text-anchor: middle; }
-#fl-canvas .node rect.box { fill: var(--night); stroke: var(--line); stroke-width: 1.5; cursor: grab; }
-#fl-canvas .node.sel rect.box { stroke: var(--amber); stroke-width: 2.5; }
-#fl-canvas .node.input rect.box, #fl-canvas .node.output rect.box { fill: var(--deep); }
-#fl-canvas .node.off { opacity: .5; }
-#fl-canvas .node .title { fill: var(--ink); font: 600 13px var(--display); pointer-events: none; }
-#fl-canvas .node .sub { fill: var(--soft); font: 11px var(--body); pointer-events: none; }
-#fl-canvas .port { fill: var(--surface); stroke: var(--amber); stroke-width: 2; cursor: crosshair; }
-#fl-canvas .port:hover, #fl-canvas .port.target { fill: var(--amber); }
-.fl-panel { background: var(--surface); border-radius: 12px; padding: 14px; align-self: start; }
-.fl-panel h2 { margin-bottom: 6px; }
-.fl-panel .pill { width: 100%; margin-top: 8px; }
-@keyframes fl-flow { to { stroke-dashoffset: -13; } }
-@media (prefers-reduced-motion: reduce) { #fl-canvas .edge { animation: none; } }
 .chain-locked { color: var(--warn); }
-#fl-canvas .node.send rect.box { stroke-dasharray: 5 4; }
-#fl-canvas .node.app rect.box, #fl-canvas .node.receive rect.box { stroke: var(--amber); stroke-opacity: .5; }
-#fl-canvas .node.fx rect.box { fill: var(--deep); }
+
+/* ===== editor de fluxo (estilo editor de nós) ===== */
+:root { --k-input: #4fa3ff; --k-output: #8fe3a8; --k-plugin: #b28cff; --k-fx: var(--amber); --k-send: #ff8fb1; --k-app: #4fd1c5; --k-mixer: #9aa3cc; }
+.fl-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
+.fl-head h1 { margin: 0 auto 0 0; }
+.fl-saved { color: var(--ok); font-size: 12px; min-width: 110px; text-align: right; }
+.fl-stage { position: relative; height: calc(100vh - 210px); min-height: 440px; border-radius: 14px; overflow: hidden;
+  background: var(--deep); background-image: radial-gradient(color-mix(in srgb, var(--soft) 35%, transparent) 1px, transparent 1px);
+  background-size: 24px 24px; }
+#fl-canvas { width: 100%; height: 100%; display: block; touch-action: none; user-select: none; cursor: grab; }
+#fl-canvas.panning { cursor: grabbing; }
+
+/* setas */
+#fl-canvas .edge { fill: none; stroke: color-mix(in srgb, var(--soft) 70%, transparent); stroke-width: 2.5; }
+#fl-canvas .edge.live { stroke: var(--amber); stroke-dasharray: 8 6; animation: fl-flow 0.9s linear infinite; }
+#fl-canvas .edge-g:hover .edge, #fl-canvas .edge.sel { stroke: var(--amber); stroke-width: 3.5; }
+#fl-canvas .hit { fill: none; stroke: transparent; stroke-width: 18; cursor: pointer; }
+#fl-canvas .edge-tools { opacity: 0; transition: opacity .12s; }
+#fl-canvas .edge-g:hover .edge-tools, #fl-canvas .edge-g.sel .edge-tools { opacity: 1; }
+#fl-canvas .gain { fill: var(--amber); font: 600 11px var(--display); text-anchor: middle; }
+#fl-canvas .wire { fill: none; stroke: var(--amber); stroke-width: 2.5; stroke-dasharray: 4 4; }
+
+/* botões redondos dentro do SVG */
+#fl-canvas .btn circle { fill: var(--surface); stroke: var(--line); stroke-width: 1.5; }
+#fl-canvas .btn text { fill: var(--ink); font: 600 13px var(--body); text-anchor: middle; dominant-baseline: central; pointer-events: none; }
+#fl-canvas .btn { cursor: pointer; }
+#fl-canvas .btn:hover circle { stroke: var(--amber); fill: var(--night); }
+#fl-canvas .btn.danger:hover circle { stroke: var(--bad); }
+
+/* caixas */
+#fl-canvas .node { cursor: grab; }
+#fl-canvas .node .card { fill: var(--surface); stroke: var(--line); stroke-width: 1.5; }
+#fl-canvas .node:hover .card { stroke: color-mix(in srgb, var(--kind) 70%, var(--line)); }
+#fl-canvas .node.sel .card { stroke: var(--kind); stroke-width: 2.5; }
+#fl-canvas .node .badge { fill: color-mix(in srgb, var(--kind) 22%, transparent); }
+#fl-canvas .node .glyph { fill: var(--kind); font: 700 17px var(--display); text-anchor: middle; dominant-baseline: central; pointer-events: none; }
+#fl-canvas .node .title { fill: var(--ink); font: 600 14px var(--display); pointer-events: none; }
+#fl-canvas .node .sub { fill: var(--soft); font: 11.5px var(--body); pointer-events: none; }
+#fl-canvas .node .stripe { fill: var(--kind); }
+#fl-canvas .node.off { opacity: .5; }
+#fl-canvas .node .tools { opacity: 0; transition: opacity .12s; }
+#fl-canvas .node:hover .tools, #fl-canvas .node.sel .tools { opacity: 1; }
+#fl-canvas .port { fill: var(--deep); stroke: var(--kind); stroke-width: 2.5; cursor: crosshair; }
+#fl-canvas .port:hover, #fl-canvas .port.target { fill: var(--kind); }
+#fl-canvas .plus line { stroke: var(--line); stroke-width: 2; }
+#fl-canvas .plus rect { fill: var(--surface); stroke: var(--line); stroke-width: 1.5; }
+#fl-canvas .plus text { fill: var(--soft); font: 700 16px var(--body); text-anchor: middle; dominant-baseline: central; pointer-events: none; }
+#fl-canvas .plus { cursor: pointer; opacity: .75; }
+#fl-canvas .plus:hover { opacity: 1; }
+#fl-canvas .plus:hover rect { stroke: var(--amber); }
+#fl-canvas .plus:hover text { fill: var(--amber); }
+#fl-canvas .k-input { --kind: var(--k-input); } #fl-canvas .k-output { --kind: var(--k-output); }
+#fl-canvas .k-plugin { --kind: var(--k-plugin); } #fl-canvas .k-fx { --kind: var(--k-fx); }
+#fl-canvas .k-send { --kind: var(--k-send); } #fl-canvas .k-app, #fl-canvas .k-receive { --kind: var(--k-app); }
+#fl-canvas .k-mixer { --kind: var(--k-mixer); }
+
+/* zoom e dica */
+.fl-zoom { position: absolute; left: 14px; bottom: 14px; display: flex; gap: 6px; }
+.fl-zoom button { width: 34px; height: 34px; border-radius: 9px; border: 1px solid var(--line); background: var(--surface); cursor: pointer; font-size: 16px; }
+.fl-zoom button:hover { border-color: var(--amber); }
+.fl-empty-hint { position: absolute; left: 50%; top: 14px; transform: translateX(-50%); color: var(--soft); font-size: 12px;
+  background: color-mix(in srgb, var(--surface) 85%, transparent); padding: 6px 12px; border-radius: 999px; pointer-events: none; white-space: nowrap; }
+
+/* gavetas (catálogo e propriedades) */
+.fl-drawer { position: absolute; top: 12px; right: 12px; bottom: 12px; width: 300px; background: var(--surface); border-radius: 12px;
+  border: 1px solid var(--line); padding: 14px; overflow: auto; box-shadow: 0 10px 30px rgba(0,0,0,.25); }
+.fl-drawer[hidden] { display: none; }
+.fl-drawer-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+.fl-drawer-head h2 { margin: 0; }
+#fl-search { width: 100%; margin-bottom: 10px; }
+.fl-catalog h3 { font: 600 11px var(--body); color: var(--soft); letter-spacing: .06em; text-transform: uppercase; margin: 14px 0 6px; }
+.fl-item { display: grid; grid-template-columns: 34px 1fr; gap: 10px; align-items: center; width: 100%; text-align: left; padding: 8px;
+  border-radius: 9px; border: 1px solid transparent; background: none; cursor: pointer; }
+.fl-item:hover, .fl-item:focus-visible { background: var(--night); border-color: var(--line); }
+.fl-item .ic { width: 34px; height: 34px; border-radius: 9px; display: grid; place-items: center; font: 700 15px var(--display);
+  background: color-mix(in srgb, var(--kind) 22%, transparent); color: var(--kind); }
+.fl-item b { display: block; font-weight: 600; }
+.fl-item small { color: var(--soft); font-size: 12px; }
+.fl-item.k-input { --kind: var(--k-input); } .fl-item.k-plugin { --kind: var(--k-plugin); } .fl-item.k-fx { --kind: var(--k-fx); }
+.fl-item.k-send { --kind: var(--k-send); } .fl-item.k-app { --kind: var(--k-app); } .fl-item.k-mixer { --kind: var(--k-mixer); }
+#fl-panel .pill { width: 100%; margin-top: 8px; }
+#fl-panel select, #fl-panel input[type=text] { width: 100%; }
+@keyframes fl-flow { to { stroke-dashoffset: -14; } }
+@media (prefers-reduced-motion: reduce) { #fl-canvas .edge.live { animation: none; } }
+.fl-of { color: var(--soft); font-size: 13px; }

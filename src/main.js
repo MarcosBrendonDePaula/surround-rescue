@@ -354,8 +354,8 @@ const baseName = (p) => String(p).split(/[\\/]/).pop().replace(/\.vst3$/i, "");
 async function plLoadDevices() {
   const s = await invoke("get_status");
   PL.devices = [
-    ...s.outputs.map((d) => ({ ...d, kind: "Saída" })),
-    ...s.inputs.map((d) => ({ ...d, kind: "Microfone" })),
+    ...s.outputs.map((d) => ({ ...d, kind: "Saída", name: d.connected ? d.name : `${d.name} (desconectado)` })),
+    ...s.inputs.map((d) => ({ ...d, kind: "Microfone", name: d.connected ? d.name : `${d.name} (desconectado)` })),
   ];
   if (!PL.device) PL.device = s.output?.id || PL.devices[0]?.id || null;
   $("#pl-device").innerHTML = PL.devices

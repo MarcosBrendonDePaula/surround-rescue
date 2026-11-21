@@ -27,6 +27,8 @@ pub struct Device {
     pub apo: bool,
     /// Usa as posições novas (SFX/MFX) que nossa ligação automática não cobre.
     pub needs_configurator: bool,
+    /// false = existe mas está desconectado (ex.: fone tirado da tomada)
+    pub connected: bool,
 }
 
 impl Device {
@@ -54,8 +56,10 @@ pub fn list(flow: &str) -> Vec<Device> {
     for id in root.enum_keys().flatten() {
         let Ok(dev) = root.open_subkey(&id) else { continue };
         let state: u32 = dev.get_value("DeviceState").unwrap_or(0);
-        if state != 1 {
-            continue; // só ativos e visíveis (o virtual escondido da Razer fica de fora)
+        // 1 = ativo, 8 = desconectado (aparece na lista, com aviso). O resto (desativado,
+        // ausente, e o virtual escondido da Razer com bits altos) fica de fora.
+        if state != 1 && state != 8 {
+            continue;
         }
         let props = dev.open_subkey("Properties").ok();
         let get = |k: &str| props.as_ref().and_then(|p| p.get_value::<String, _>(k).ok()).unwrap_or_default();
@@ -63,6 +67,7 @@ pub fn list(flow: &str) -> Vec<Device> {
         out.push(Device {
             needs_configurator: !has_apo(&fx) && (fx.contains_key(&fx_key(5)) || fx.contains_key(&fx_key(6))),
             apo: has_apo(&fx),
+            connected: state == 1,
             id,
             flow: flow.into(),
             name: get(PKEY_NAME),

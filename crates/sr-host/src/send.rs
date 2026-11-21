@@ -27,9 +27,24 @@ impl Sender {
         let stop = Arc::new(AtomicBool::new(false));
         let (dev, st) = (device.to_string(), stop.clone());
         let thread = std::thread::spawn(move || {
-            match unsafe { render(&dev, cons, src_rate, &st, log) } {
-                Ok((rate, under, ratio)) => log(&format!("envio para {dev} encerrado: destino {rate} Hz, faltas de som {under}, correção de relógio {:+.4}%", (ratio - 1.0) * 100.0)),
-                Err(e) => log(&format!("envio para {dev} parou: {e}")),
+            // destino desconectado ou perdido no meio: tenta de novo a cada 2 s até o fluxo parar
+            let mut cons = Some(cons);
+            let mut out: Option<Output> = None;
+            let mut warned = false;
+            while !st.load(Ordering::SeqCst) {
+                match unsafe { render(&dev, &mut cons, &mut out, src_rate, &st, log) } {
+                    Ok((rate, under, ratio)) => {
+                        log(&format!("envio para {dev} encerrado: destino {rate} Hz, faltas de som {under}, correção de relógio {:+.4}%", (ratio - 1.0) * 100.0));
+                        break;
+                    }
+                    Err(e) => {
+                        if !warned {
+                            log(&format!("envio para {dev} esperando o dispositivo: {e}"));
+                            warned = true;
+                        }
+                        std::thread::sleep(std::time::Duration::from_secs(2));
+                    }
+                }
             }
         });
         (prod, Sender { device: device.to_string(), stop, thread: Some(thread) })
@@ -45,7 +60,14 @@ impl Drop for Sender {
     }
 }
 
-unsafe fn render(device: &str, cons: ring::Consumer, src_rate: u32, stop: &AtomicBool, log: fn(&str)) -> Result<(u32, u64, f64)> {
+unsafe fn render(
+    device: &str,
+    cons: &mut Option<ring::Consumer>,
+    out_slot: &mut Option<Output>,
+    src_rate: u32,
+    stop: &AtomicBool,
+    log: fn(&str),
+) -> Result<(u32, u64, f64)> {
     CoInitializeEx(None, COINIT_MULTITHREADED).ok()?;
     let en: IMMDeviceEnumerator = CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)?;
     let dev = en.GetDevice(&HSTRING::from(format!("{{0.0.0.00000000}}.{}", device.to_lowercase())))?;
@@ -65,7 +87,15 @@ unsafe fn render(device: &str, cons: ring::Consumer, src_rate: u32, stop: &Atomi
     client.SetEventHandle(event)?;
     let rc: IAudioRenderClient = client.GetService()?;
     let total = client.GetBufferSize()?;
-    let mut out = Output::new(cons, src_rate, rate);
+    // ponte: reaproveita a fila entre tentativas; se o dispositivo voltou com outra taxa, recria
+    if out_slot.as_ref().map(|o| (o.ratio() - rate as f64 / src_rate as f64).abs() > 0.01).unwrap_or(false) {
+        *cons = Some(out_slot.take().unwrap().into_queue());
+    }
+    if out_slot.is_none() {
+        *out_slot = Some(Output::new(cons.take().expect("fila"), src_rate, rate));
+    }
+    let out = out_slot.as_mut().unwrap();
+    log(&format!("envio para {device} tocando ({rate} Hz, {ch} canais)"));
     let mut tmp = vec![0.0f32; total as usize * ch];
     // espera o fluxo encher até o alvo antes de tocar (evita falha logo no começo)
     let target = (TARGET_MS / 1000.0 * src_rate as f64) as usize;

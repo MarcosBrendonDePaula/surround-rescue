@@ -166,30 +166,31 @@
 
       <!-- FLUXO -->
       <section id="tab-fluxo" class="tab">
-        <div class="eqhead">
+        <div class="fl-head">
           <h1>Fluxo de áudio</h1>
-          <select id="fl-device" aria-label="Dispositivo"></select>
+          <label class="fl-of" for="fl-device">Fluxo de:</label>
+          <select id="fl-device" aria-label="Dispositivo cujo fluxo está sendo editado"></select>
+          <span class="fl-saved" id="fl-saved"></span>
+          <button class="pill" id="fl-serial" title="Desfaz o desenho e volta a uma fila simples">Organizar em fila</button>
+          <button class="pill solid" id="fl-open-creator">+ Adicionar</button>
         </div>
-        <p class="lead">Puxe uma seta da bolinha de saída de uma caixa até a entrada de outra. Cada caixa soma o que chega nela. Duplo clique num plugin abre a janela dele. Tudo é salvo sozinho a cada mudança.</p>
-        <p class="note" id="fl-saved"></p>
-        <div class="fl-toolbar">
-          <select id="fl-found" aria-label="Plugins instalados"></select>
-          <button class="pill solid" id="fl-add">Adicionar plugin</button>
-          <button class="pill" id="fl-mixer">Adicionar mixer</button>
-          <button class="pill" id="fl-send">Enviar para dispositivo</button>
-          <button class="pill" id="fl-app">Capturar programa</button>
-          <button class="pill" id="fl-recv">Receber de dispositivo</button>
-          <select id="fl-fx" aria-label="Bloco nativo">
-            <option value="gain">Ganho</option><option value="invert">Inverter (subtrair)</option><option value="pan">Pan</option>
-            <option value="mono">Mono</option><option value="swap">Trocar L/R</option><option value="delay">Atraso</option>
-            <option value="lowpass">Passa-baixa</option><option value="highpass">Passa-alta</option>
-          </select>
-          <button class="pill" id="fl-addfx">Adicionar bloco</button>
-          <button class="pill" id="fl-serial">Organizar em fila</button>
-        </div>
-        <div class="fl-wrap">
-          <div class="fl-scroll"><svg id="fl-canvas" aria-label="Editor de fluxo"></svg></div>
-          <aside id="fl-panel" class="fl-panel"></aside>
+        <div class="fl-stage">
+          <svg id="fl-canvas" aria-label="Editor de fluxo"></svg>
+          <div class="fl-zoom">
+            <button id="fl-fit" title="Ajustar à tela">⤢</button>
+            <button id="fl-zin" title="Aproximar">+</button>
+            <button id="fl-zout" title="Afastar">−</button>
+          </div>
+          <div class="fl-empty-hint" id="fl-hint">Arraste o fundo para mover · roda do mouse para zoom · clique no <b>+</b> de uma caixa para ligar a próxima</div>
+          <aside class="fl-drawer" id="fl-creator" hidden>
+            <div class="fl-drawer-head">
+              <h2 id="fl-creator-title">Adicionar caixa</h2>
+              <button class="icon" id="fl-creator-close" title="Fechar">×</button>
+            </div>
+            <input type="text" id="fl-search" placeholder="Buscar (ex.: reverb, ganho, spotify)" aria-label="Buscar">
+            <div id="fl-catalog" class="fl-catalog"></div>
+          </aside>
+          <aside class="fl-drawer" id="fl-panel" hidden></aside>
         </div>
       </section>
 

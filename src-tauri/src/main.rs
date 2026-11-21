@@ -122,10 +122,14 @@ fn set_config(config: Config, state: State<AppState>) -> Result<Snapshot, String
     Ok(snapshot(&state))
 }
 
+/// Comandos que leem o registro ou chamam programas externos rodam em segundo plano
+/// (async + spawn_blocking): comando síncrono do Tauri roda na thread da janela e congela a tela.
 #[tauri::command]
-fn get_status(state: State<AppState>) -> system::Status {
+async fn get_status(state: State<'_, AppState>) -> Result<system::Status, String> {
     let c = state.config.lock().unwrap().clone();
-    system::status(c.output_device.as_deref(), c.input_device.as_deref())
+    tauri::async_runtime::spawn_blocking(move || system::status(c.output_device.as_deref(), c.input_device.as_deref()))
+        .await
+        .map_err(|e| e.to_string())
 }
 
 /// Liga/desliga o motor de áudio num dispositivo (pede administrador uma vez).
@@ -153,13 +157,13 @@ fn preview(state: State<AppState>) -> String {
 }
 
 #[tauri::command]
-fn scan_plugins() -> Result<Vec<plugins::Found>, String> {
-    plugins::scan()
+async fn scan_plugins() -> Result<Vec<plugins::Found>, String> {
+    tauri::async_runtime::spawn_blocking(plugins::scan).await.map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-fn audio_apps() -> Result<Vec<String>, String> {
-    plugins::audio_apps()
+async fn audio_apps() -> Result<Vec<String>, String> {
+    tauri::async_runtime::spawn_blocking(plugins::audio_apps).await.map_err(|e| e.to_string())?
 }
 
 #[tauri::command]

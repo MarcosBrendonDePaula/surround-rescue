@@ -106,6 +106,11 @@ impl Output {
         }
     }
 
+    /// Devolve a fila (para recriar a ponte com outra taxa quando o dispositivo volta).
+    pub fn into_queue(self) -> ring::Consumer {
+        self.queue
+    }
+
     /// Quadros esperando na fila (lado do fluxo).
     pub fn queued(&self) -> usize {
         self.queue.len()
