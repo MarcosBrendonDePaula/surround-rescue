@@ -1,78 +1,258 @@
 const { invoke } = window.__TAURI__.core;
 const { listen } = window.__TAURI__.event;
 
-const FIELDS = ["spatial", "width", "bass_db", "clarity_db", "treble_db", "volume_db"];
-const UNIT = { spatial: "%", width: "%", bass_db: " dB", clarity_db: " dB", treble_db: " dB", volume_db: " dB" };
-let settings = null;
+const EQ_FREQS = ["31", "63", "125", "250", "500", "1K", "2K", "4K", "8K", "16K"];
+const FMT = {
+  front_angle: (v) => `${v}°`, spatial: (v) => `${v}`, volume_db: (v) => `${v > 0 ? "+" : ""}${v} dB`,
+  gain_db: (v) => `${v > 0 ? "+" : ""}${v} dB`,
+};
+const $ = (s) => document.querySelector(s);
+const $$ = (s) => [...document.querySelectorAll(s)];
+
+let snap = null; // { config, applied, eq_presets }
 let timer = null;
 
-const $ = (id) => document.getElementById(id);
+const cfg = () => snap.config;
+const cur = () => cfg().profiles.find((p) => p.name === cfg().active).settings;
 
-function render() {
-  $("enabled").checked = settings.enabled;
-  document.body.classList.toggle("off", !settings.enabled);
-  for (const f of FIELDS) {
-    const el = $(f);
-    el.value = settings[f];
-    el.nextElementSibling.textContent = `${settings[f]}${UNIT[f]}`;
-  }
-  document.querySelectorAll("#presets button").forEach((b) =>
-    b.classList.toggle("active", b.dataset.p === settings.profile));
-  invoke("preview", { settings }).then((t) => ($("preview").textContent = t));
+function fillPct(el) {
+  const p = ((el.value - el.min) / (el.max - el.min)) * 100;
+  el.style.setProperty("--p", `${p}%`);
 }
 
+// ---------- render ----------
+function render() {
+  const s = cur();
+  const c = cfg();
+
+  // perfis
+  const opts = c.profiles.map((p) => `<option${p.name === c.active ? " selected" : ""}>${esc(p.name)}</option>`).join("");
+  $("#profile").innerHTML = opts;
+  $("#rule-profile").innerHTML = c.profiles.map((p) => `<option>${esc(p.name)}</option>`).join("");
+  $("#p-del").disabled = c.profiles.length < 2;
+
+  // campos do perfil
+  for (const el of $$("[data-s]")) {
+    const k = el.dataset.s;
+    if (el.type === "checkbox") el.checked = s[k];
+    else { el.value = s[k]; fillPct(el); }
+  }
+  for (const o of $$("[data-o]")) {
+    const k = o.dataset.o;
+    o.textContent = FMT[k] ? FMT[k](s[k]) : s[k];
+  }
+  for (const f of $$("[data-dep]")) f.classList.toggle("off", !s[f.dataset.dep]);
+
+  // microfone
+  for (const el of $$("[data-m]")) {
+    const k = el.dataset.m;
+    if (el.type === "checkbox") el.checked = c.mic[k];
+    else { el.value = c.mic[k]; fillPct(el); }
+  }
+  for (const o of $$("[data-mo]")) {
+    const k = o.dataset.mo;
+    o.textContent = FMT[k] ? FMT[k](c.mic[k]) : c.mic[k];
+  }
+
+  // equalizador
+  $("#eq-preset").innerHTML =
+    snap.eq_presets.map(([id, label]) => `<option value="${id}"${id === s.eq_preset ? " selected" : ""}>${label}</option>`).join("") +
+    `<option value="personalizado"${s.eq_preset === "personalizado" ? " selected" : ""}>Personalizado</option>`;
+  $$(".band input").forEach((el, i) => { el.value = s.eq[i]; fillPct(el); el.previousElementSibling.textContent = fmtDb(s.eq[i]); });
+  $("#eq").classList.toggle("off", !s.eq_enabled);
+
+  // regras
+  $("#auto-switch").checked = c.auto_switch;
+  $("#applied").textContent = snap.applied || c.active;
+  $("#rules").innerHTML = c.app_rules.length
+    ? c.app_rules.map((r, i) => `<tr><td>${esc(r.exe)}</td><td>${esc(r.profile)}</td><td><button data-del="${i}" title="Remover">✕</button></td></tr>`).join("")
+    : `<tr><td colspan="3" class="desc">Nenhum programa ainda.</td></tr>`;
+
+  drawStage(s);
+  invoke("preview").then((t) => ($("#preview").textContent = t));
+}
+
+function fmtDb(v) { return `${v > 0 ? "+" : ""}${v}`; }
+function esc(t) { return String(t).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]); }
+
+// ---------- palco (calibração) ----------
+function drawStage(s) {
+  const R = 95;
+  const a = s.front_angle;
+  const spk = [
+    ["C", 0, false], ["FL", -a, true], ["FR", a, true], ["SL", -90, false], ["SR", 90, false], ["RL", -150, false], ["RR", 150, false],
+  ];
+  const on = s.enabled;
+  let svg = `<circle class="ring" r="${R}"/><circle class="ring2" r="${R + 12}"/><circle class="ring2" r="${R - 12}"/>`;
+  for (const [name, deg, active] of spk) {
+    const r = (deg * Math.PI) / 180;
+    const x = Math.sin(r) * R, y = -Math.cos(r) * R;
+    const lit = active && on;
+    if (lit) svg += `<line class="ray" x1="0" y1="0" x2="${x}" y2="${y}"/>`;
+    svg += `<rect class="spk${lit ? " on" : ""}" x="${x - 7}" y="${y - 7}" width="14" height="14" rx="2" transform="rotate(${deg} ${x} ${y})"/>`;
+    const lx = Math.sin(r) * (R + 24), ly = -Math.cos(r) * (R + 24) + 3;
+    svg += `<text class="lbl${lit ? " on" : ""}" x="${lx}" y="${ly}">${name}</text>`;
+  }
+  // manequim visto de cima
+  svg += `<ellipse cx="0" cy="6" rx="26" ry="12" fill="#333"/><circle cx="0" cy="0" r="13" fill="#555"/><path d="M-4 -12 L0 -18 L4 -12 Z" fill="${on ? "#44d62c" : "#777"}"/>`;
+  $("#stage").innerHTML = svg;
+}
+
+// ---------- salvar ----------
 async function save() {
   try {
-    settings = await invoke("set_settings", { settings });
-    $("error").hidden = true;
+    snap = await invoke("set_config", { config: cfg() });
+    $("#error").hidden = true;
   } catch (e) {
-    $("error").textContent = String(e);
-    $("error").hidden = false;
+    $("#error").textContent = String(e);
+    $("#error").hidden = false;
   }
   render();
-  refreshStatus();
 }
+function saveSoon() { clearTimeout(timer); timer = setTimeout(save, 120); }
 
-function saveSoon() {
-  clearTimeout(timer);
-  timer = setTimeout(save, 150);
-}
-
+// ---------- status ----------
 async function refreshStatus() {
   const s = await invoke("get_status");
   const items = [
     [s.apo_installed, "Equalizer APO instalado", "Equalizer APO não instalado", "bad"],
-    [s.apo_on_kraken, "Efeito ativo no Kraken", s.kraken_found ? "Equalizer APO não está ligado no Kraken (abra o Configurator)" : "Kraken não encontrado", "bad"],
+    [s.headphone.apo, "Fone do Kraken: efeito ativo", s.headphone.id ? "Fone do Kraken sem Equalizer APO (abra o Configurator)" : "Kraken não conectado", "bad"],
+    [s.mic.apo, "Microfone do Kraken: efeito ativo", s.mic.id ? "Microfone sem Equalizer APO (marque-o no Configurator para usar a aba MICROFONE)" : "Microfone do Kraken não encontrado", "warn"],
     [s.config_hooked, "Configuração conectada", "Configuração ainda não aplicada", "warn"],
-    [!s.razer_service_running, "Razer Surround desligado", "Razer Surround ainda rodando: pode disputar o fone", "warn"],
+    [!s.razer_service_running, "Razer Surround antigo desligado", "Razer Surround antigo ainda rodando: pode disputar o fone", "warn"],
   ];
-  $("status").innerHTML = items
-    .map(([ok, yes, no, lvl]) => `<div class="${ok ? "ok" : lvl}">${ok ? yes : no}</div>`)
-    .join("");
+  $("#status").innerHTML = items.map(([ok, y, n, l]) => `<div class="${ok ? "ok" : l}">${ok ? y : n}</div>`).join("");
+  $("#autostart").checked = s.autostart;
+}
+
+// ---------- testes de som ----------
+let actx = null;
+function testTone(pan) {
+  actx = actx || new AudioContext();
+  const len = actx.sampleRate * 0.9;
+  const buf = actx.createBuffer(1, len, actx.sampleRate);
+  const d = buf.getChannelData(0);
+  let b0 = 0, b1 = 0, b2 = 0;
+  for (let i = 0; i < len; i++) { // ruído rosa simples com envelope
+    const w = Math.random() * 2 - 1;
+    b0 = 0.99765 * b0 + w * 0.099; b1 = 0.963 * b1 + w * 0.2965; b2 = 0.57 * b2 + w * 1.0526;
+    const env = Math.min(1, i / 2000) * Math.min(1, (len - i) / 4000) * (Math.floor(i / (actx.sampleRate * 0.15)) % 2 ? 0.3 : 1);
+    d[i] = (b0 + b1 + b2 + w * 0.1848) * 0.08 * env;
+  }
+  const src = actx.createBufferSource();
+  src.buffer = buf;
+  const p = actx.createStereoPanner();
+  p.pan.value = pan;
+  src.connect(p).connect(actx.destination);
+  src.start();
+}
+
+// ---------- eventos ----------
+function bind() {
+  $$("#tabs button").forEach((b) => b.addEventListener("click", () => {
+    $$("#tabs button").forEach((x) => x.classList.toggle("active", x === b));
+    $$(".tab").forEach((t) => t.classList.toggle("active", t.id === `tab-${b.dataset.tab}`));
+    if (b.dataset.tab === "configuracoes") refreshStatus();
+    if (b.dataset.tab === "perfis") invoke("recent_apps").then((a) => ($("#recent-apps").innerHTML = a.map((x) => `<option value="${esc(x)}">`).join("")));
+  }));
+
+  for (const el of $$("[data-s]")) {
+    el.addEventListener(el.type === "checkbox" ? "change" : "input", () => {
+      cur()[el.dataset.s] = el.type === "checkbox" ? el.checked : Number(el.value);
+      render(); saveSoon();
+    });
+  }
+  for (const el of $$("[data-m]")) {
+    el.addEventListener(el.type === "checkbox" ? "change" : "input", () => {
+      cfg().mic[el.dataset.m] = el.type === "checkbox" ? el.checked : Number(el.value);
+      render(); saveSoon();
+    });
+  }
+
+  // equalizador
+  $("#eq").innerHTML = EQ_FREQS.map((f, i) =>
+    `<div class="band"><output></output><input type="range" min="-12" max="12" step="0.5" data-band="${i}"><span>${f}</span></div>`).join("") +
+    `<div class="eqscale"><span>+12dB</span><span>+6dB</span><span>0dB</span><span>-6dB</span><span>-12dB</span></div>`;
+  $$(".band input").forEach((el) => el.addEventListener("input", () => {
+    cur().eq[Number(el.dataset.band)] = Number(el.value);
+    cur().eq_preset = "personalizado";
+    render(); saveSoon();
+  }));
+  $("#eq-preset").addEventListener("change", (e) => {
+    const p = snap.eq_presets.find(([id]) => id === e.target.value);
+    if (p) { cur().eq = [...p[2]]; cur().eq_preset = p[0]; save(); }
+  });
+
+  // perfis
+  $("#profile").addEventListener("change", (e) => { cfg().active = e.target.value; save(); });
+  $("#p-new").addEventListener("click", () => {
+    let n = 1; while (cfg().profiles.some((p) => p.name === `Perfil ${n}`)) n++;
+    cfg().profiles.push({ name: `Perfil ${n}`, settings: structuredClone(cur()) });
+    cfg().active = `Perfil ${n}`;
+    save();
+  });
+  $("#p-rename").addEventListener("click", () => {
+    const sel = $("#profile");
+    const input = document.createElement("input");
+    input.type = "text"; input.value = cfg().active;
+    sel.replaceWith(input); input.focus(); input.select();
+    const done = (commit) => {
+      const name = input.value.trim();
+      if (commit && name && !cfg().profiles.some((p) => p.name === name)) {
+        const old = cfg().active;
+        cfg().profiles.find((p) => p.name === old).name = name;
+        cfg().app_rules.forEach((r) => { if (r.profile === old) r.profile = name; });
+        cfg().active = name;
+      }
+      input.replaceWith(sel);
+      commit ? save() : render();
+    };
+    input.addEventListener("keydown", (e) => { if (e.key === "Enter") done(true); if (e.key === "Escape") done(false); });
+    input.addEventListener("blur", () => done(true), { once: true });
+  });
+  $("#p-del").addEventListener("click", () => {
+    if (cfg().profiles.length < 2) return;
+    const old = cfg().active;
+    cfg().profiles = cfg().profiles.filter((p) => p.name !== old);
+    cfg().app_rules = cfg().app_rules.filter((r) => r.profile !== old);
+    cfg().active = cfg().profiles[0].name;
+    save();
+  });
+
+  // regras por programa
+  $("#auto-switch").addEventListener("change", (e) => { cfg().auto_switch = e.target.checked; save(); });
+  $("#rule-add").addEventListener("click", () => {
+    const exe = $("#rule-exe").value.trim().toLowerCase();
+    if (!exe) return;
+    cfg().app_rules = cfg().app_rules.filter((r) => r.exe !== exe);
+    cfg().app_rules.push({ exe, profile: $("#rule-profile").value });
+    $("#rule-exe").value = "";
+    save();
+  });
+  $("#rules").addEventListener("click", (e) => {
+    const i = e.target.dataset.del;
+    if (i !== undefined) { cfg().app_rules.splice(Number(i), 1); save(); }
+  });
+
+  // configurações
+  $("#autostart").addEventListener("change", async (e) => {
+    try { await invoke("set_autostart", { on: e.target.checked }); } catch (err) { $("#error").textContent = String(err); $("#error").hidden = false; }
+    refreshStatus();
+  });
+
+  // testes
+  $("#test-left").addEventListener("click", () => testTone(-1));
+  $("#test-right").addEventListener("click", () => testTone(1));
+  $("#test-both").addEventListener("click", () => testTone(0));
+
+  listen("snapshot", (e) => { snap = e.payload; render(); });
 }
 
 async function init() {
-  settings = await invoke("get_settings");
+  snap = await invoke("get_snapshot");
+  bind();
   render();
   refreshStatus();
-  setInterval(refreshStatus, 5000);
-
-  $("enabled").addEventListener("change", (e) => { settings.enabled = e.target.checked; save(); });
-  for (const f of FIELDS) {
-    $(f).addEventListener("input", (e) => {
-      settings[f] = Number(e.target.value);
-      settings.profile = "personalizado";
-      render();
-      saveSoon();
-    });
-  }
-  document.querySelectorAll("#presets button").forEach((b) =>
-    b.addEventListener("click", async () => {
-      const p = await invoke("get_preset", { name: b.dataset.p });
-      settings = { ...p, enabled: settings.enabled, volume_db: settings.volume_db };
-      save();
-    }));
-  listen("settings-changed", (e) => { settings = e.payload; render(); });
 }
 
 init();

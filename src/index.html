@@ -7,40 +7,174 @@
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
-<header>
-  <h1>Surround Rescue</h1>
-  <label class="switch" title="Ligar/desligar">
-    <input type="checkbox" id="enabled"><span></span>
-  </label>
+<header class="top">
+  <div class="brand">SURROUND <b>RESCUE</b></div>
+  <div class="profilebar">
+    <label for="profile">PERFIL</label>
+    <select id="profile"></select>
+    <button id="p-new" title="Novo perfil">+</button>
+    <button id="p-rename" title="Renomear">✎</button>
+    <button id="p-del" title="Excluir">🗑</button>
+  </div>
 </header>
 
-<section id="status" class="status"></section>
+<nav class="tabs" id="tabs">
+  <button data-tab="calibracao" class="active">CALIBRAÇÃO</button>
+  <button data-tab="audio">ÁUDIO</button>
+  <button data-tab="equalizador">EQUALIZADOR</button>
+  <button data-tab="microfone">MICROFONE</button>
+  <button data-tab="perfis">PERFIS</button>
+  <button data-tab="configuracoes">CONFIGURAÇÕES</button>
+</nav>
 
-<section>
-  <h2>Perfil</h2>
-  <div class="presets" id="presets">
-    <button data-p="natural">Natural</button>
-    <button data-p="jogo">Jogo</button>
-    <button data-p="filme">Filme</button>
-    <button data-p="musica">Música</button>
-  </div>
-</section>
+<main>
+  <!-- CALIBRAÇÃO -->
+  <section id="tab-calibracao" class="tab active">
+    <div class="cols">
+      <div class="col">
+        <label class="check"><input type="checkbox" data-s="enabled"><span>HABILITAR SOM SURROUND VIRTUAL</span></label>
+        <p class="desc">Posicione as caixas virtuais em volta da sua cabeça. Abra o ângulo até o som parecer vir das caixas verdes, não de dentro da cabeça.</p>
+        <div class="field">
+          <div class="flabel">ÂNGULO DAS CAIXAS FRONTAIS <output data-o="front_angle"></output></div>
+          <input type="range" data-s="front_angle" min="10" max="90" step="1">
+          <div class="scale"><span>10°</span><span>90°</span></div>
+        </div>
+        <div class="field">
+          <div class="flabel">INTENSIDADE DO SURROUND <output data-o="spatial"></output></div>
+          <input type="range" data-s="spatial" min="0" max="100" step="1">
+          <div class="scale"><span>0</span><span>100</span></div>
+        </div>
+        <div class="buttons">
+          <button class="btn" id="test-left">TESTAR ESQUERDA</button>
+          <button class="btn" id="test-right">TESTAR DIREITA</button>
+          <button class="btn" id="test-both">TESTAR CENTRO</button>
+        </div>
+        <p class="note">Modo estéreo: as caixas frontais são virtualizadas. As demais (centro, laterais e traseiras) chegam na versão 7.1.</p>
+      </div>
+      <div class="col center">
+        <svg id="stage" viewBox="-130 -130 260 260" aria-label="Posição das caixas virtuais"></svg>
+      </div>
+    </div>
+  </section>
 
-<section class="sliders">
-  <h2>Ajustes</h2>
-  <div class="row"><label for="spatial">Espacialização</label><input type="range" id="spatial" min="0" max="100" step="1"><output></output></div>
-  <div class="row"><label for="width">Largura</label><input type="range" id="width" min="0" max="200" step="5"><output></output></div>
-  <div class="row"><label for="bass_db">Graves</label><input type="range" id="bass_db" min="-6" max="12" step="0.5"><output></output></div>
-  <div class="row"><label for="clarity_db">Clareza de voz</label><input type="range" id="clarity_db" min="-6" max="9" step="0.5"><output></output></div>
-  <div class="row"><label for="treble_db">Agudos</label><input type="range" id="treble_db" min="-6" max="9" step="0.5"><output></output></div>
-  <div class="row"><label for="volume_db">Volume</label><input type="range" id="volume_db" min="-30" max="6" step="0.5"><output></output></div>
-  <p class="hint">O volume nunca passa do limite seguro: o app desconta automaticamente o reforço de graves e efeitos.</p>
-</section>
+  <!-- ÁUDIO -->
+  <section id="tab-audio" class="tab">
+    <div class="cols">
+      <div class="col">
+        <label class="check"><input type="checkbox" data-s="stereo_enhanced"><span>ESTÉREO MELHORADO</span></label>
+        <p class="desc">Aumenta o alcance do som ampliando o campo estéreo.</p>
 
-<details>
-  <summary>Configuração gerada</summary>
-  <pre id="preview"></pre>
-</details>
+        <label class="check"><input type="checkbox" data-s="bass_enabled"><span>REFORÇO DE GRAVES</span></label>
+        <p class="desc">Otimiza a resposta das frequências baixas para melhorar a saída de sons graves.</p>
+        <div class="field" data-dep="bass_enabled">
+          <input type="range" data-s="bass_level" min="0" max="100" step="1">
+          <div class="scale"><span>0</span><output data-o="bass_level"></output><span>100</span></div>
+        </div>
+
+        <label class="check"><input type="checkbox" data-s="normalization_enabled"><span>NORMALIZAÇÃO DE SOM</span></label>
+        <p class="desc">Controla o áudio e reduz aumentos repentinos de volume, como explosões.<br><i>Nesta versão: reserva margem contra estouro. O compressor completo vem na próxima.</i></p>
+        <div class="field" data-dep="normalization_enabled">
+          <input type="range" data-s="normalization_level" min="0" max="100" step="1">
+          <div class="scale"><span>0</span><output data-o="normalization_level"></output><span>100</span></div>
+        </div>
+      </div>
+      <div class="col">
+        <label class="check"><input type="checkbox" data-s="clarity_enabled"><span>CLAREZA DE VOZ</span></label>
+        <div class="field" data-dep="clarity_enabled">
+          <div class="flabel">NÍVEL DE PRESENÇA</div>
+          <p class="desc">Melhora a clareza das conversas de voz recebidas.</p>
+          <input type="range" data-s="clarity_presence" min="-100" max="100" step="1">
+          <div class="scale"><span>-100</span><output data-o="clarity_presence"></output><span>100</span></div>
+        </div>
+        <div class="field" data-dep="clarity_enabled">
+          <div class="flabel">NÍVEL DE VOLUME</div>
+          <p class="desc">Aumenta ou reduz o volume das vozes recebidas.</p>
+          <input type="range" data-s="clarity_volume" min="-100" max="100" step="1">
+          <div class="scale"><span>-100</span><output data-o="clarity_volume"></output><span>100</span></div>
+        </div>
+        <div class="field">
+          <div class="flabel">VOLUME GERAL <output data-o="volume_db"></output></div>
+          <input type="range" data-s="volume_db" min="-30" max="6" step="0.5">
+          <div class="scale"><span>-30 dB</span><span>+6 dB</span></div>
+          <p class="desc">Nunca estoura: o app desconta sozinho o reforço de graves e efeitos.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- EQUALIZADOR -->
+  <section id="tab-equalizador" class="tab">
+    <div class="eqhead">
+      <label class="check"><input type="checkbox" data-s="eq_enabled"><span>ATIVAR EQUALIZADOR</span></label>
+      <div>
+        <div class="flabel">PREDEFINIÇÕES DO EQUALIZADOR</div>
+        <select id="eq-preset"></select>
+      </div>
+    </div>
+    <div class="eq" id="eq"></div>
+  </section>
+
+  <!-- MICROFONE -->
+  <section id="tab-microfone" class="tab">
+    <div class="cols">
+      <div class="col">
+        <label class="check"><input type="checkbox" data-m="enabled"><span>HABILITAR MELHORIAS DO MICROFONE</span></label>
+        <p class="desc">Vale para o microfone do Kraken em todos os programas (Discord, jogos, gravação).</p>
+        <label class="check"><input type="checkbox" data-m="boost"><span>REFORÇO DO MICROFONE (+10 dB)</span></label>
+        <label class="check"><input type="checkbox" data-m="rumble_filter"><span>FILTRO DE RUÍDOS GRAVES</span></label>
+        <p class="desc">Corta ventilador, batidas na mesa e zumbidos abaixo de 90 Hz.</p>
+      </div>
+      <div class="col">
+        <div class="field">
+          <div class="flabel">GANHO <output data-mo="gain_db"></output></div>
+          <input type="range" data-m="gain_db" min="-10" max="10" step="0.5">
+          <div class="scale"><span>-10 dB</span><span>+10 dB</span></div>
+        </div>
+        <div class="field">
+          <div class="flabel">NITIDEZ DA VOZ <output data-mo="clarity"></output></div>
+          <input type="range" data-m="clarity" min="0" max="100" step="1">
+          <div class="scale"><span>0</span><span>100</span></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- PERFIS -->
+  <section id="tab-perfis" class="tab">
+    <label class="check"><input type="checkbox" id="auto-switch"><span>TROCAR PERFIL AUTOMATICAMENTE PELO PROGRAMA EM USO</span></label>
+    <p class="desc">Quando um programa da lista estiver em primeiro plano, o perfil dele é aplicado. Nos outros, vale o perfil selecionado no topo.</p>
+    <p class="desc">Agora aplicado: <b id="applied"></b></p>
+    <table class="rules">
+      <thead><tr><th>PROGRAMA</th><th>PERFIL</th><th></th></tr></thead>
+      <tbody id="rules"></tbody>
+    </table>
+    <div class="addrule">
+      <input id="rule-exe" placeholder="ex.: discord.exe" list="recent-apps">
+      <datalist id="recent-apps"></datalist>
+      <select id="rule-profile"></select>
+      <button class="btn" id="rule-add">ADICIONAR</button>
+    </div>
+    <p class="desc">Dica: deixe o programa aberto, volte aqui e ele aparece nas sugestões do campo.</p>
+  </section>
+
+  <!-- CONFIGURAÇÕES -->
+  <section id="tab-configuracoes" class="tab">
+    <div class="cols">
+      <div class="col">
+        <div class="flabel">DISPOSITIVO</div>
+        <div id="status" class="status"></div>
+        <label class="check"><input type="checkbox" id="autostart"><span>INICIAR COM O WINDOWS</span></label>
+        <p class="desc">Abre minimizado perto do relógio.</p>
+      </div>
+      <div class="col">
+        <details>
+          <summary>CONFIGURAÇÃO GERADA</summary>
+          <pre id="preview"></pre>
+        </details>
+      </div>
+    </div>
+  </section>
+</main>
 
 <p id="error" class="error" hidden></p>
 <script src="main.js"></script>

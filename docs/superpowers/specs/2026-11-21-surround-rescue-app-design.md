@@ -26,5 +26,10 @@ travamento do serviço, áudio estourado/cru e programas que não "entram" no pr
 - Controles: espacialização (crossfeed), largura estéreo, graves, clareza de voz, agudos, volume.
 - Ícone na bandeja (mostrar, ligar/desligar, sair).
 
+## v0.2 (feito)
+Interface no estilo do Razer Surround (abas CALIBRAÇÃO, ÁUDIO, EQUALIZADOR + MICROFONE, PERFIS, CONFIGURAÇÕES),
+perfis nomeados, troca automática por programa em foco, microfone (reforço, ganho, filtro de graves, nitidez),
+iniciar com o Windows, configuração separada por dispositivo (`Device:` com GUID do fone e do microfone).
+
 ## Fora do v1
 7.1 real, perfis HRIR (convolução), perfil por programa, microfone (gate/redução de ruído), VU meter, auto-reparo após update do Windows.

@@ -1,49 +1,96 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod eqapo;
+mod profiles;
 mod system;
 
-use eqapo::Settings;
+use profiles::Config;
+use serde::Serialize;
 use std::fs;
 use std::sync::Mutex;
+use std::time::Duration;
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::{Emitter, Manager, State, WindowEvent};
+use tauri::{AppHandle, Emitter, Manager, State, WindowEvent};
 
-struct AppState(Mutex<Settings>);
+struct AppState {
+    config: Mutex<Config>,
+    /// Perfil efetivamente aplicado agora (pode vir de uma regra de programa)
+    applied: Mutex<String>,
+    last_text: Mutex<String>,
+    /// Programas vistos em primeiro plano (sugestões na aba PERFIS)
+    seen: Mutex<std::collections::BTreeSet<String>>,
+}
 
-fn load() -> Settings {
-    fs::read_to_string(system::settings_path())
+fn config_path() -> std::path::PathBuf {
+    system::data_dir().join("config.json")
+}
+
+fn load() -> Config {
+    fs::read_to_string(config_path())
         .ok()
-        .and_then(|t| serde_json::from_str(&t).ok())
+        .and_then(|t| serde_json::from_str::<Config>(&t).ok())
         .unwrap_or_default()
+        .normalized()
 }
 
-fn persist_and_apply(s: &Settings) -> Result<(), String> {
-    let path = system::settings_path();
-    if let Some(p) = path.parent() {
-        fs::create_dir_all(p).map_err(|e| e.to_string())?;
+fn persist(c: &Config) -> Result<(), String> {
+    fs::create_dir_all(system::data_dir()).map_err(|e| e.to_string())?;
+    fs::write(config_path(), serde_json::to_string_pretty(c).unwrap()).map_err(|e| e.to_string())
+}
+
+/// Aplica o perfil correto para o programa em foco. Só reescreve arquivos se algo mudou.
+fn apply_now(state: &AppState) -> Result<String, String> {
+    let cfg = state.config.lock().unwrap().clone();
+    let fg = system::foreground_exe();
+    if let Some(e) = &fg {
+        if e != "surround-rescue.exe" {
+            state.seen.lock().unwrap().insert(e.clone());
+        }
     }
-    fs::write(&path, serde_json::to_string_pretty(s).unwrap()).map_err(|e| e.to_string())?;
-    system::apply(&eqapo::generate(s))
+    let profile = cfg.resolve(fg.as_deref()).clone();
+    let hp = system::kraken_endpoint("Render");
+    let mic = system::kraken_endpoint("Capture");
+    let root = eqapo::generate_root(hp.id.as_deref(), mic.id.as_deref());
+    let out = eqapo::generate(&profile.settings);
+    let mic_txt = eqapo::generate_mic(&cfg.mic);
+    let joined = format!("{root}\0{out}\0{mic_txt}");
+    let mut last = state.last_text.lock().unwrap();
+    if *last != joined {
+        system::apply(&root, &out, &mic_txt)?;
+        *last = joined;
+    }
+    *state.applied.lock().unwrap() = profile.name.clone();
+    Ok(profile.name)
+}
+
+#[derive(Serialize, Clone)]
+struct Snapshot {
+    config: Config,
+    applied: String,
+    eq_presets: Vec<(String, String, [f64; 10])>,
+}
+
+fn snapshot(state: &AppState) -> Snapshot {
+    Snapshot {
+        config: state.config.lock().unwrap().clone(),
+        applied: state.applied.lock().unwrap().clone(),
+        eq_presets: eqapo::eq_presets().into_iter().map(|(a, b, c)| (a.into(), b.into(), c)).collect(),
+    }
 }
 
 #[tauri::command]
-fn get_settings(state: State<AppState>) -> Settings {
-    state.0.lock().unwrap().clone()
+fn get_snapshot(state: State<AppState>) -> Snapshot {
+    snapshot(&state)
 }
 
 #[tauri::command]
-fn set_settings(settings: Settings, state: State<AppState>) -> Result<Settings, String> {
-    let s = settings.sanitized();
-    persist_and_apply(&s)?;
-    *state.0.lock().unwrap() = s.clone();
-    Ok(s)
-}
-
-#[tauri::command]
-fn get_preset(name: String) -> Option<Settings> {
-    eqapo::preset(&name)
+fn set_config(config: Config, state: State<AppState>) -> Result<Snapshot, String> {
+    let c = config.normalized();
+    persist(&c)?;
+    *state.config.lock().unwrap() = c;
+    apply_now(&state)?;
+    Ok(snapshot(&state))
 }
 
 #[tauri::command]
@@ -52,19 +99,37 @@ fn get_status() -> system::Status {
 }
 
 #[tauri::command]
-fn preview(settings: Settings) -> String {
-    eqapo::generate(&settings)
+fn set_autostart(on: bool) -> Result<(), String> {
+    system::set_autostart(on)
 }
 
-fn toggle(app: &tauri::AppHandle) {
+#[tauri::command]
+fn preview(state: State<AppState>) -> String {
+    let cfg = state.config.lock().unwrap().clone();
+    let p = cfg.resolve(None);
+    format!("# Perfil: {}\n{}\n{}", p.name, eqapo::generate(&p.settings), eqapo::generate_mic(&cfg.mic))
+}
+
+#[tauri::command]
+fn recent_apps(state: State<AppState>) -> Vec<String> {
+    state.seen.lock().unwrap().iter().cloned().collect()
+}
+
+fn toggle(app: &AppHandle) {
     let state = app.state::<AppState>();
-    let mut s = state.0.lock().unwrap();
-    s.enabled = !s.enabled;
-    let _ = persist_and_apply(&s);
-    let _ = app.emit("settings-changed", s.clone());
+    {
+        let mut c = state.config.lock().unwrap();
+        let active = c.active.clone();
+        if let Some(p) = c.profiles.iter_mut().find(|p| p.name == active) {
+            p.settings.enabled = !p.settings.enabled;
+        }
+        let _ = persist(&c);
+    }
+    let _ = apply_now(&state);
+    let _ = app.emit("snapshot", snapshot(&state));
 }
 
-fn show(app: &tauri::AppHandle) {
+fn show(app: &AppHandle) {
     if let Some(w) = app.get_webview_window("main") {
         let _ = w.show();
         let _ = w.unminimize();
@@ -73,13 +138,14 @@ fn show(app: &tauri::AppHandle) {
 }
 
 fn main() {
-    let initial = load();
+    let state = AppState { config: Mutex::new(load()), applied: Mutex::new(String::new()), last_text: Mutex::new(String::new()), seen: Mutex::new(Default::default()) };
     // Reaplica na inicialização: garante o estado salvo mesmo após reinício.
-    let _ = system::apply(&eqapo::generate(&initial));
+    let _ = apply_now(&state);
 
     tauri::Builder::default()
-        .manage(AppState(Mutex::new(initial)))
-        .invoke_handler(tauri::generate_handler![get_settings, set_settings, get_preset, get_status, preview])
+        .plugin(tauri_plugin_single_instance::init(|app, _, _| show(app)))
+        .manage(state)
+        .invoke_handler(tauri::generate_handler![get_snapshot, set_config, get_status, set_autostart, preview, recent_apps])
         .setup(|app| {
             let show_i = MenuItem::with_id(app, "show", "Abrir", true, None::<&str>)?;
             let toggle_i = MenuItem::with_id(app, "toggle", "Ligar/Desligar surround", true, None::<&str>)?;
@@ -107,6 +173,18 @@ fn main() {
                     let _ = w.hide();
                 }
             }
+            // Troca automática de perfil pelo programa em foco
+            let handle = app.handle().clone();
+            std::thread::spawn(move || loop {
+                std::thread::sleep(Duration::from_millis(1000));
+                let state = handle.state::<AppState>();
+                let before = state.applied.lock().unwrap().clone();
+                if let Ok(now) = apply_now(&state) {
+                    if now != before {
+                        let _ = handle.emit("snapshot", snapshot(&state));
+                    }
+                }
+            });
             Ok(())
         })
         .on_window_event(|window, event| {
