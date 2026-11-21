@@ -18,6 +18,37 @@ use crate::{MicSettings, Settings, EQ_FREQS};
 
 const CEILING_DB: f64 = -1.0;
 
+/// Liga "zerar números minúsculos" (FTZ/DAZ) enquanto processa e restaura no fim. Números denormais
+/// (caudas de filtros e da sala decaindo) deixam cada conta até 100× mais lenta.
+struct NoDenormals(#[allow(dead_code)] u32);
+
+impl NoDenormals {
+    #[inline]
+    fn on() -> Self {
+        #[cfg(target_arch = "x86_64")]
+        #[allow(deprecated)]
+        unsafe {
+            use std::arch::x86_64::{_mm_getcsr, _mm_setcsr};
+            let old = _mm_getcsr();
+            _mm_setcsr(old | 0x8040);
+            return NoDenormals(old);
+        }
+        #[allow(unreachable_code)]
+        NoDenormals(0)
+    }
+}
+
+impl Drop for NoDenormals {
+    #[inline]
+    fn drop(&mut self) {
+        #[cfg(target_arch = "x86_64")]
+        #[allow(deprecated)]
+        unsafe {
+            std::arch::x86_64::_mm_setcsr(self.0);
+        }
+    }
+}
+
 fn db_to_lin(db: f64) -> f64 {
     10f64.powf(db / 20.0)
 }
@@ -222,6 +253,7 @@ impl Processor {
 
     /// Processa canais separados (formato de VST3/CLAP).
     pub fn process_stereo(&mut self, left: &mut [f32], right: &mut [f32]) {
+        let _ftz = NoDenormals::on();
         for (l, r) in left.iter_mut().zip(right.iter_mut()) {
             (*l, *r) = self.process_frame(*l, *r);
         }
@@ -229,6 +261,7 @@ impl Processor {
 
     /// Processa áudio intercalado (formato do APO/WASAPI). Canais além de 2 passam direto.
     pub fn process_interleaved(&mut self, buf: &mut [f32], channels: usize) {
+        let _ftz = NoDenormals::on();
         if channels < 2 {
             return;
         }
@@ -321,6 +354,7 @@ impl MicProcessor {
         if !self.enabled {
             return;
         }
+        let _ftz = NoDenormals::on();
         for x in buf.iter_mut() {
             let mut v = *x as f64;
             for f in &mut self.filters[..self.n] {

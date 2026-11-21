@@ -5,6 +5,7 @@ const EQ_FREQS = ["31", "63", "125", "250", "500", "1K", "2K", "4K", "8K", "16K"
 const FMT = {
   front_angle: (v) => `${v}°`, spatial: (v) => `${v}`, volume_db: (v) => `${v > 0 ? "+" : ""}${v} dB`,
   gain_db: (v) => `${v > 0 ? "+" : ""}${v} dB`,
+  nr_db: (v) => `−${v} dB`, gate_db: (v) => `${v} dB`,
 };
 const $ = (s) => document.querySelector(s);
 const $$ = (s) => [...document.querySelectorAll(s)];

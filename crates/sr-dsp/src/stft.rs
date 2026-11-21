@@ -179,6 +179,56 @@ impl Default for Synth {
     }
 }
 
+/// Dois canais reais numa FFT só (truque clássico: x = a + i·b). Devolve os espectros de a e b.
+pub fn frame_pair(fft: &Fft, a: &mut Analyzer, b: &mut Analyzer, sa: &mut [C; N], sb: &mut [C; N]) {
+    for i in 0..N {
+        sa[i] = C::new(a.buf[i] * a.win[i], b.buf[i] * b.win[i]);
+    }
+    fft.run(sa, false);
+    for k in 0..BINS {
+        let z = sa[k];
+        let zc = sa[(N - k) % N].conj();
+        // A = (Z + Z*)/2 ; B = (Z − Z*)/(2i)
+        let d = z.sub(zc);
+        sb[k] = C::new(0.5 * d.im, -0.5 * d.re);
+        let s = z.add(zc);
+        sa[k] = C::new(0.5 * s.re, 0.5 * s.im);
+    }
+    // (os bins acima de N/2 ficam com lixo: ninguém lê; a síntese espelha)
+    a.buf.copy_within(HOP.., 0);
+    b.buf.copy_within(HOP.., 0);
+}
+
+/// Duas saídas reais numa FFT inversa só. `sa`/`sb`: espectros (BINS de baixo); `sa` vira rascunho.
+pub fn synth_pair(fft: &Fft, a: &mut Synth, b: &mut Synth, sa: &mut [C; N], sb: &[C; N]) {
+    // Z[k] = A[k] + i·B[k] (com A e B hermitianos) → IFFT: parte real = a, imaginária = b
+    let mut z = [C::default(); N];
+    for k in 0..BINS {
+        let (mut ak, mut bk) = (sa[k], sb[k]);
+        if k == 0 || k == N / 2 {
+            ak.im = 0.0;
+            bk.im = 0.0;
+        }
+        z[k] = C::new(ak.re - bk.im, ak.im + bk.re);
+        if k > 0 && k < N / 2 {
+            // A[N−k] = conj(A[k]), B[N−k] = conj(B[k])
+            z[N - k] = C::new(ak.re + bk.im, -ak.im + bk.re);
+        }
+    }
+    fft.run(&mut z, true);
+    let inv = 1.0 / N as f32;
+    for i in 0..N {
+        a.acc[i] += z[i].re * inv * a.win[i];
+        b.acc[i] += z[i].im * inv * b.win[i];
+    }
+    for s in [a, b] {
+        s.out.copy_from_slice(&s.acc[..HOP]);
+        s.acc.copy_within(HOP.., 0);
+        s.acc[HOP..].iter_mut().for_each(|v| *v = 0.0);
+    }
+    let _ = sa;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -202,6 +252,33 @@ mod tests {
             }
         }
         let err = (2000..8000).map(|i| (y[i] - x[i - N]).abs()).fold(0.0f32, f32::max);
+        assert!(err < 1e-4, "erro {err}");
+    }
+
+    #[test]
+    fn pares_reconstroem_os_dois_canais() {
+        let fft = Fft::new();
+        let (mut a1, mut a2) = (Analyzer::new(), Analyzer::new());
+        let (mut s1, mut s2) = (Synth::new(), Synth::new());
+        let (mut x1, mut x2) = ([C::default(); N], [C::default(); N]);
+        let f = |i: usize| (((i as f32) * 0.013).sin() * 0.5, ((i as f32) * 0.31).cos() * 0.3);
+        let mut pos = 0;
+        let mut err = 0.0f32;
+        for i in 0..8000 {
+            if i > 2000 {
+                let (e1, e2) = f(i - N);
+                err = err.max((s1.read(pos) - e1).abs()).max((s2.read(pos) - e2).abs());
+            }
+            let (u, v) = f(i);
+            a1.write(pos, u);
+            a2.write(pos, v);
+            pos += 1;
+            if pos == HOP {
+                pos = 0;
+                frame_pair(&fft, &mut a1, &mut a2, &mut x1, &mut x2);
+                synth_pair(&fft, &mut s1, &mut s2, &mut x1, &x2);
+            }
+        }
         assert!(err < 1e-4, "erro {err}");
     }
 }

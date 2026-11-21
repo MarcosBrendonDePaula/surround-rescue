@@ -43,27 +43,49 @@ fn hrir_at(az: f64, sr: f64) -> ([f32; MAX_TAPS], [f32; MAX_TAPS], usize) {
 }
 
 /// Dois produtos escalares de uma vez (o mesmo histórico com os filtros dos dois ouvidos).
-/// Função separada e sem inline: o compilador vetoriza sempre do mesmo jeito.
-#[inline(never)]
+/// Em x86-64 usa SSE (4 multiplicações por instrução, presente em todo processador de 64 bits):
+/// o compilador sozinho não vetorizava e fazia 1 por ciclo.
+#[inline]
 fn dot2(h: &[f32], a: &[f32], b: &[f32]) -> (f32, f32) {
     let n = h.len().min(a.len()).min(b.len());
-    let (h, a, b) = (&h[..n], &a[..n], &b[..n]);
-    let mut sa = [0.0f32; 16];
-    let mut sb = [0.0f32; 16];
-    let (hc, ac, bc) = (h.chunks_exact(16), a.chunks_exact(16), b.chunks_exact(16));
-    let (ht, at, bt) = (hc.remainder(), ac.remainder(), bc.remainder());
-    for ((hh, aa), bb) in hc.zip(ac).zip(bc) {
-        for j in 0..16 {
-            sa[j] += hh[j] * aa[j];
-            sb[j] += hh[j] * bb[j];
+    #[cfg(target_arch = "x86_64")]
+    unsafe {
+        use std::arch::x86_64::*;
+        let (hp, ap, bp) = (h.as_ptr(), a.as_ptr(), b.as_ptr());
+        let mut sa = [_mm_setzero_ps(); 4];
+        let mut sb = [_mm_setzero_ps(); 4];
+        let mut k = 0;
+        while k + 16 <= n {
+            for j in 0..4 {
+                let hv = _mm_loadu_ps(hp.add(k + 4 * j));
+                sa[j] = _mm_add_ps(sa[j], _mm_mul_ps(hv, _mm_loadu_ps(ap.add(k + 4 * j))));
+                sb[j] = _mm_add_ps(sb[j], _mm_mul_ps(hv, _mm_loadu_ps(bp.add(k + 4 * j))));
+            }
+            k += 16;
         }
+        let sum = |v: [__m128; 4]| {
+            let t = _mm_add_ps(_mm_add_ps(v[0], v[1]), _mm_add_ps(v[2], v[3]));
+            let mut o = [0f32; 4];
+            _mm_storeu_ps(o.as_mut_ptr(), t);
+            o[0] + o[1] + o[2] + o[3]
+        };
+        let (mut ra, mut rb) = (sum(sa), sum(sb));
+        while k < n {
+            ra += *hp.add(k) * *ap.add(k);
+            rb += *hp.add(k) * *bp.add(k);
+            k += 1;
+        }
+        (ra, rb)
     }
-    let (mut ra, mut rb) = (sa.iter().sum::<f32>(), sb.iter().sum::<f32>());
-    for ((x, y), z) in ht.iter().zip(at).zip(bt) {
-        ra += x * y;
-        rb += x * z;
+    #[cfg(not(target_arch = "x86_64"))]
+    {
+        let mut r = (0.0f32, 0.0f32);
+        for k in 0..n {
+            r.0 += h[k] * a[k];
+            r.1 += h[k] * b[k];
+        }
+        r
     }
-    (ra, rb)
 }
 
 /// Sala curta (rede de 4 atrasos realimentados), como o "reverb" do Nahimic: tira o som de dentro da cabeça.
@@ -221,7 +243,7 @@ impl Virtualizer {
     }
 
     /// Entrada já separada pelo upmix (frente, centro e ambiente) → 7.1 virtual.
-    #[inline]
+    #[inline(never)]
     pub fn upmixed(&mut self, fl: f64, fr: f64, c: f64, al: f64, ar: f64) -> (f64, f64) {
         self.amb_buf[self.pos] = al;
         self.amb_buf2[self.pos] = ar;

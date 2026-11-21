@@ -141,6 +141,22 @@
               <input type="range" data-m="clarity" min="0" max="100" step="1">
             </div>
           </div>
+          <div class="block">
+            <label class="toggle"><input type="checkbox" data-m="noise_reduction"><span></span>Redução de ruído de fundo</label>
+            <p class="desc">Aprende o ruído constante (ventilador, ar-condicionado, chiado) e tira enquanto você fala. Soma 11 ms de atraso.</p>
+            <div class="field">
+              <div class="flabel"><span>Quanto tirar</span><output data-mo="nr_db"></output></div>
+              <input type="range" data-m="nr_db" min="3" max="25" step="1">
+            </div>
+          </div>
+          <div class="block">
+            <label class="toggle"><input type="checkbox" data-m="gate"><span></span>Porta de ruído</label>
+            <p class="desc">Fecha o microfone quando você não está falando (teclado, respiração, barulho da sala).</p>
+            <div class="field">
+              <div class="flabel"><span>Abre acima de</span><output data-mo="gate_db"></output></div>
+              <input type="range" data-m="gate_db" min="-70" max="-20" step="1">
+            </div>
+          </div>
         </div>
       </section>
 

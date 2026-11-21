@@ -5,7 +5,7 @@
 //! - a frente fica com o resto (os sons posicionados à esquerda ou à direita).
 //! A clareza de voz realça 1–4 kHz só no centro: sobe a voz sem subir explosões e música.
 
-use crate::stft::{Analyzer, Fft, Synth, BINS, C, HOP, N};
+use crate::stft::{frame_pair, synth_pair, Analyzer, Fft, Synth, BINS, C, HOP, N};
 
 pub struct Upmix {
     fft: Fft,
@@ -18,7 +18,7 @@ pub struct Upmix {
     x: Vec<C>,
     clarity: Vec<f32>,
     spec: Box<[[C; N]; 2]>,
-    tmp: Box<[C; N]>,
+    outs: Box<[[C; N]; 5]>,
     /// fração da parte comum que vai para o centro (0..1)
     pub center: f32,
 }
@@ -35,7 +35,7 @@ impl Upmix {
             x: vec![C::default(); BINS],
             clarity: vec![1.0; BINS],
             spec: Box::new([[C::default(); N]; 2]),
-            tmp: Box::new([C::default(); N]),
+            outs: Box::new([[C::default(); N]; 5]),
             center: 0.7,
         };
         u.set_clarity(sr, 0.0);
@@ -58,7 +58,7 @@ impl Upmix {
     }
 
     /// Entra um par de amostras; sai [FL, FR, C, AL, AR] (atrasado de N amostras).
-    #[inline]
+    #[inline(never)]
     pub fn process(&mut self, l: f32, r: f32) -> [f32; 5] {
         let out = std::array::from_fn(|i| self.sy[i].read(self.pos));
         self.an[0].write(self.pos, l);
@@ -72,9 +72,11 @@ impl Upmix {
     }
 
     fn frame(&mut self) {
-        let (s0, s1) = self.spec.split_at_mut(1);
-        self.an[0].frame(&self.fft, &mut s0[0]);
-        self.an[1].frame(&self.fft, &mut s1[0]);
+        {
+            let (s0, s1) = self.spec.split_at_mut(1);
+            let (a0, a1) = self.an.split_at_mut(1);
+            frame_pair(&self.fft, &mut a0[0], &mut a1[0], &mut s0[0], &mut s1[0]);
+        }
         let a = 0.6f32; // média no tempo (~13 ms): estimativa estável sem atrasar a reação
         for k in 0..BINS {
             let (lk, rk) = (self.spec[0][k], self.spec[1][k]);
@@ -82,30 +84,31 @@ impl Upmix {
             self.pr[k] = a * self.pr[k] + (1.0 - a) * rk.norm2();
             let xr = lk.mul(rk.conj());
             self.x[k] = self.x[k].scale(a).add(xr.scale(1.0 - a));
+            let (pl, pr) = (self.pl[k], self.pr[k]);
+            let xa = self.x[k].norm2().sqrt();
+            // semelhança (1 = igual nos dois lados) e coerência (1 = mesmo som, 0 = sons sem relação)
+            let sim = (2.0 * xa / (pl + pr + 1e-12)).min(1.0);
+            let coh = (xa / (pl * pr).sqrt().max(1e-12)).min(1.0);
+            let c = lk.add(rk).scale(0.5 * self.center * sim * sim);
+            let amb = (1.0 - coh).clamp(0.0, 1.0).sqrt();
+            self.outs[0][k] = lk.sub(c);
+            self.outs[1][k] = rk.sub(c);
+            self.outs[2][k] = c.scale(self.clarity[k] * std::f32::consts::SQRT_2);
+            self.outs[3][k] = lk.scale(amb);
+            self.outs[4][k] = rk.scale(amb);
         }
-        // escreve as 5 saídas, uma por vez, no rascunho
-        for o in 0..5 {
-            for k in 0..BINS {
-                let (lk, rk) = (self.spec[0][k], self.spec[1][k]);
-                let (pl, pr) = (self.pl[k], self.pr[k]);
-                let xa = self.x[k].norm2().sqrt();
-                let e = pl + pr + 1e-12;
-                // semelhança (1 = igual nos dois lados) e coerência (1 = mesmo som, 0 = sons sem relação)
-                let sim = (2.0 * xa / e).min(1.0);
-                let coh = (xa / (pl * pr).sqrt().max(1e-12)).min(1.0);
-                let gc = self.center * sim * sim;
-                let c = lk.add(rk).scale(0.5 * gc);
-                let amb = (1.0 - coh).clamp(0.0, 1.0).sqrt();
-                self.tmp[k] = match o {
-                    0 => lk.sub(c),
-                    1 => rk.sub(c),
-                    2 => c.scale(self.clarity[k] * std::f32::consts::SQRT_2),
-                    3 => lk.scale(amb),
-                    _ => rk.scale(amb),
-                };
-            }
-            self.sy[o].frame(&self.fft, &mut self.tmp);
-        }
+        // 5 saídas com 3 FFTs inversas (duas por vez)
+        let (o01, rest) = self.outs.split_at_mut(2);
+        let (o0, o1) = o01.split_at_mut(1);
+        let (o2, o34) = rest.split_at_mut(1);
+        let (o3, o4) = o34.split_at_mut(1);
+        let (s01, srest) = self.sy.split_at_mut(2);
+        let (s0, s1) = s01.split_at_mut(1);
+        let (s2, s34) = srest.split_at_mut(1);
+        let (s3, s4) = s34.split_at_mut(1);
+        synth_pair(&self.fft, &mut s0[0], &mut s1[0], &mut o0[0], &o1[0]);
+        synth_pair(&self.fft, &mut s3[0], &mut s4[0], &mut o3[0], &o4[0]);
+        s2[0].frame(&self.fft, &mut o2[0]);
     }
 
     pub fn reset(&mut self) {
