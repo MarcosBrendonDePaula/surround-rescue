@@ -48,3 +48,11 @@ além do driver virtual do Razer Surround.
 ## Futuro: APO próprio
 Motivo: compressor/limitador real (normalização), mudança instantânea sem recarregar arquivo, VU meter, HRTF próprio.
 A lógica de áudio (`eqapo.rs`) já está isolada do motor para permitir a troca.
+
+## APO próprio — primeiro carregamento real (2026-11-21)
+- audiodg cria o APO **agregado** (CreateInstance com outer, pedindo IUnknown) → objeto COM escrito à mão.
+- Em dispositivos modernos (Realtek) o APO entra no fim da cadeia composta EFX (`{d04e05a6-...},15`, REG_MULTI_SZ),
+  sem tirar o efeito do fabricante. Chaves FxProperties: admins só têm QueryValues/SetValue.
+- Validado na Realtek Digital Output: Initialize → GUID do endpoint → LockForProcess 48 kHz/2 ch → prova de vida.
+- Interfaces opcionais consultadas pelo audiodg (respondemos E_NOINTERFACE): IAudioSystemEffects2/3,
+  IAudioProcessingObjectNotifications, IAudioProcessingObjectLoggingService etc. — candidatas a implementar depois.
