@@ -18,7 +18,7 @@
       <button data-tab="audio"><svg viewBox="0 0 24 24"><path d="M4 9h4l5-4v14l-5-4H4z"/><path d="M16.5 8.5a5 5 0 0 1 0 7"/></svg>Áudio</button>
       <button data-tab="equalizador"><svg viewBox="0 0 24 24"><path d="M6 4v16M12 4v16M18 4v16"/><circle cx="6" cy="14" r="2"/><circle cx="12" cy="8" r="2"/><circle cx="18" cy="16" r="2"/></svg>Equalizador</button>
       <button data-tab="microfone"><svg viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21"/></svg>Microfone</button>
-      <button data-tab="plugins"><svg viewBox="0 0 24 24"><path d="M9 3v5M15 3v5"/><rect x="5" y="8" width="14" height="6" rx="2"/><path d="M12 14v3a3 3 0 0 1-3 3"/></svg>Plugins</button>
+      <button data-tab="plugins" hidden><svg viewBox="0 0 24 24"><path d="M9 3v5M15 3v5"/><rect x="5" y="8" width="14" height="6" rx="2"/><path d="M12 14v3a3 3 0 0 1-3 3"/></svg>Plugins</button>
       <button data-tab="fluxo"><svg viewBox="0 0 24 24"><rect x="2" y="4" width="7" height="6" rx="1.5"/><rect x="15" y="14" width="7" height="6" rx="1.5"/><path d="M9 7h3a3 3 0 0 1 3 3v4"/></svg>Fluxo</button>
       <button data-tab="perfis"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M7 10h6M7 14h10"/></svg>Perfis</button>
       <button data-tab="configuracoes"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M5.6 18.4l2.1-2.1M16.3 7.7l2.1-2.1"/></svg>Configurações</button>
@@ -252,6 +252,7 @@
             <div id="status" class="status"></div>
           </div>
           <div class="block">
+            <h2>Motor e inicialização</h2>
             <label class="toggle"><input type="checkbox" id="own-engine"><span></span>Usar o motor próprio (em teste)</label>
             <p class="desc">Troca o Equalizer APO pelo motor do Surround Rescue, que também roda os plugins VST. Precisa do motor instalado no dispositivo.</p>
             <label class="toggle"><input type="checkbox" id="autostart"><span></span>Iniciar com o Windows</label>
@@ -261,6 +262,22 @@
               <pre id="preview"></pre>
             </details>
           </div>
+        </div>
+        <div class="block cf-plugins">
+          <h2>Pastas de plugins</h2>
+          <p class="desc">Onde o app procura VST3, VST2 e CLAP. As pastas padrão do Windows já entram sozinhas; adicione aqui as outras.</p>
+          <ul class="cf-list" id="cf-dirs"></ul>
+          <div class="cf-row">
+            <input type="text" id="cf-dir" placeholder="C:\Program Files (x86)\VSTPlugins\ReaPlugs" aria-label="Pasta de plugins">
+            <button class="pill solid" id="cf-add">Adicionar pasta</button>
+            <button class="pill" id="cf-rescan">Procurar de novo</button>
+          </div>
+          <p class="desc" id="cf-total"></p>
+          <p class="desc" id="cf-bridge"></p>
+          <details>
+            <summary>Pastas padrão</summary>
+            <ul class="cf-list cf-defaults" id="cf-defaults"></ul>
+          </details>
         </div>
       </section>
     </main>

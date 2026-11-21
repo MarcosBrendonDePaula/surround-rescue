@@ -343,6 +343,7 @@ async function init() {
   bind();
   render();
   refreshStatus();
+  plDirsBind();
 }
 
 init();
@@ -370,8 +371,90 @@ async function plLoadChain() {
 }
 
 // pastas de plugins escolhidas pelo usuário (lembradas neste computador)
-const plDirs = () => { try { return JSON.parse(localStorage.getItem("sr-plugin-dirs") || "[]"); } catch (e) { return []; } };
-const plAddDir = (d) => { const l = plDirs(); if (!l.includes(d)) { l.push(d); try { localStorage.setItem("sr-plugin-dirs", JSON.stringify(l)); } catch (e) {} } };
+// pastas de plugins do usuário: ficam na configuração do app (aba Configurações)
+const plDirs = () => (snap?.config?.plugin_dirs || []);
+const plAddDir = (d) => {
+  const l = plDirs();
+  if (l.some((x) => x.toLowerCase() === d.toLowerCase())) return;
+  cfg().plugin_dirs = [...l, d];
+  save();
+};
+const plRemoveDir = (d) => { cfg().plugin_dirs = plDirs().filter((x) => x !== d); save(); };
+// pastas que o executor sempre procura (iguais às do sr-host)
+const PL_DEFAULT_DIRS = [
+  ["VST3", "C:\\Program Files\\Common Files\\VST3"],
+  ["VST3", "%LOCALAPPDATA%\\Programs\\Common\\VST3"],
+  ["VST2", "C:\\Program Files\\VSTPlugins"],
+  ["VST2", "C:\\Program Files\\Steinberg\\VSTPlugins"],
+  ["VST2", "C:\\Program Files\\Common Files\\VST2"],
+  ["VST2", "C:\\Program Files (x86)\\VSTPlugins"],
+  ["VST2", "C:\\Program Files (x86)\\Steinberg\\VSTPlugins"],
+  ["VST2", "pasta registrada pelos instaladores (VSTPluginsPath)"],
+  ["CLAP", "C:\\Program Files\\Common Files\\CLAP"],
+  ["CLAP", "%LOCALAPPDATA%\\Programs\\Common\\CLAP"],
+];
+
+function plDirsRender() {
+  const box = $("#cf-dirs");
+  if (!box) return;
+  const count = (d) => {
+    const k = d.toLowerCase().replace(/\\+$/, "") + "\\";
+    const list = PL.found.filter((f) => String(f.path).toLowerCase().startsWith(k));
+    if (!PL.found.length) return "";
+    if (!list.length) return "nenhum plugin";
+    const by = {};
+    list.forEach((f) => { const t = `${f.format}${f.bits === 32 ? " 32 bits" : ""}`; by[t] = (by[t] || 0) + 1; });
+    return Object.entries(by).map(([t, n]) => `${n} ${t}`).join(", ");
+  };
+  const mine = plDirs();
+  box.innerHTML = (mine.length
+    ? mine.map((d) => `<li><span class="cf-path">${esc(d)}</span><small>${esc(count(d))}</small><button class="pill" data-rmdir="${esc(d)}">Remover</button></li>`).join("")
+    : `<li class="cf-empty">Nenhuma pasta sua ainda. Adicione abaixo a pasta onde seus plugins estão instalados.</li>`);
+  $("#cf-defaults").innerHTML = PL_DEFAULT_DIRS.map(([f, d]) => `<li><span class="pb-fmt">${f}</span> ${esc(d)}</li>`).join("");
+  $("#cf-total").textContent = PL.found.length
+    ? `${PL.found.length} plugins encontrados (${PL.found.filter((f) => f.supported !== false).length} utilizáveis).`
+    : "Clique em Procurar de novo para contar os plugins.";
+}
+
+function plDirsBind() {
+  if (!$("#cf-dirs")) return;
+  $("#cf-dirs").addEventListener("click", (e) => {
+    const b = e.target.closest("[data-rmdir]");
+    if (b) { plRemoveDir(b.dataset.rmdir); plDirsRender(); }
+  });
+  const add = async () => {
+    const d = $("#cf-dir").value.trim().replace(/^"|"$/g, "");
+    if (!d) return;
+    plAddDir(d);
+    $("#cf-dir").value = "";
+    plDirsRender();
+    await plScan();
+    plDirsRender();
+  };
+  $("#cf-add").addEventListener("click", add);
+  $("#cf-dir").addEventListener("keydown", (e) => { if (e.key === "Enter") add(); });
+  $("#cf-rescan").addEventListener("click", async () => {
+    $("#cf-total").textContent = "Procurando plugins…";
+    await plScan();
+    plDirsRender();
+  });
+  invoke("plugin_env").then((env) => {
+    $("#cf-bridge").textContent = env.bridge32
+      ? "Executor de 32 bits instalado: plugins VST2 de 32 bits funcionam."
+      : "Executor de 32 bits não encontrado: plugins de 32 bits não vão carregar.";
+  }).catch(() => {});
+  // pastas guardadas na versão anterior (só na interface) vão para a configuração
+  try {
+    const old = JSON.parse(localStorage.getItem("sr-plugin-dirs") || "[]");
+    if (old.length) { old.forEach(plAddDir); localStorage.removeItem("sr-plugin-dirs"); }
+  } catch (e) {}
+  // conta os plugins de cada pasta ao abrir a aba
+  $$('#tabs button[data-tab="configuracoes"]').forEach((b) => b.addEventListener('click', async () => {
+    if (!PL.found.length) { await plScan(); }
+    plDirsRender();
+  }));
+  plDirsRender();
+}
 const plLabel = (f) => `${f.name || baseName(f.path)} · ${f.format || "VST3"}${f.bits === 32 ? " 32 bits (ainda não suportado)" : ""}`;
 
 async function plScan() {

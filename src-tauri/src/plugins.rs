@@ -162,6 +162,13 @@ pub fn open_window(endpoint: &str, index: usize, host: &HostProcess) -> Result<(
 }
 
 /// Procura o sr-host.exe ao lado do app (instalado) ou na pasta de build (desenvolvimento).
+/// O executor de 32 bits está ao lado do sr-host (ou na pasta de compilação de 32 bits)?
+pub fn bridge32_installed() -> bool {
+    let Some(h) = host_exe() else { return false };
+    let d = h.parent().unwrap().to_path_buf();
+    d.join("sr-bridge32.exe").is_file() || d.join(r"..\i686-pc-windows-msvc\release\sr-bridge32.exe").is_file()
+}
+
 pub fn host_exe() -> Option<PathBuf> {
     let me = std::env::current_exe().ok()?;
     let dir = me.parent()?;

@@ -33,6 +33,8 @@ pub struct Config {
     pub input_device: Option<String>,
     /// Motor de áudio: false = Equalizer APO, true = motor próprio (APO Surround Rescue, em teste)
     pub own_engine: bool,
+    /// Pastas extras onde procurar plugins (além das padrão do Windows)
+    pub plugin_dirs: Vec<String>,
 }
 
 impl Default for Config {
@@ -46,6 +48,7 @@ impl Default for Config {
             output_device: None,
             input_device: None,
             own_engine: false,
+            plugin_dirs: vec![],
         }
     }
 }
