@@ -180,6 +180,7 @@ async function refreshStatus() {
   ];
   $("#status").innerHTML = items.map(([ok, y, n, l]) => `<div class="${ok ? "ok" : l}">${esc(ok ? y : n)}</div>`).join("");
   $("#autostart").checked = s.autostart;
+  $("#own-engine").checked = !!cfg().own_engine;
   renderDevices("#dev-out", "#dev-out-state", s.outputs, s.output, "output_device", "Render");
   renderDevices("#dev-in", "#dev-in-state", s.inputs, s.input, "input_device", "Capture");
 }
@@ -320,6 +321,7 @@ function bind() {
   });
 
   // configurações
+  $("#own-engine").addEventListener("change", (e) => { cfg().own_engine = e.target.checked; save(); });
   $("#dev-out").addEventListener("change", (e) => { cfg().output_device = e.target.value || null; save().then(refreshStatus); });
   $("#dev-in").addEventListener("change", (e) => { cfg().input_device = e.target.value || null; save().then(refreshStatus); });
   $("#autostart").addEventListener("change", async (e) => {

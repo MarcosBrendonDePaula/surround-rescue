@@ -53,7 +53,13 @@ fn apply_now(state: &AppState) -> Result<String, String> {
     let profile = cfg.resolve(fg.as_deref()).clone();
     let hp = system::pick(&devices::list("Render"), cfg.output_device.as_deref());
     let mic = system::pick(&devices::list("Capture"), cfg.input_device.as_deref());
-    let root = eqapo::generate_root(hp.as_ref().map(|d| d.id.as_str()), mic.as_ref().map(|d| d.id.as_str()));
+    // motor próprio ativo: o Equalizer APO fica em "passa direto" para o efeito não sair em dobro
+    let root = if cfg.own_engine {
+        "# Controlado pelo Surround Rescue: motor próprio ativo, Equalizer APO em espera
+".to_string()
+    } else {
+        eqapo::generate_root(hp.as_ref().map(|d| d.id.as_str()), mic.as_ref().map(|d| d.id.as_str()))
+    };
     let out = eqapo::generate(&profile.settings);
     let mic_txt = eqapo::generate_mic(&cfg.mic);
     let joined = format!("{root}\0{out}\0{mic_txt}");

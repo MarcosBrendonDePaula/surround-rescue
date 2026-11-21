@@ -31,6 +31,8 @@ pub struct Config {
     pub output_device: Option<String>,
     /// Id do microfone escolhido (None = automático)
     pub input_device: Option<String>,
+    /// Motor de áudio: false = Equalizer APO, true = motor próprio (APO Surround Rescue, em teste)
+    pub own_engine: bool,
 }
 
 impl Default for Config {
@@ -43,6 +45,7 @@ impl Default for Config {
             mic: MicSettings::default(),
             output_device: None,
             input_device: None,
+            own_engine: false,
         }
     }
 }

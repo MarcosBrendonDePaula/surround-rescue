@@ -18,4 +18,5 @@ if (Test-Path $bak) {
   "Cadeia original restaurada em $($b.endpoint)"
 }
 Restart-Service Audiosrv -Force
-if (Test-Path $dll) { & regsvr32.exe /s /u $dll; "APO desregistrado" }
+# só desregistra o APO se nenhum outro dispositivo ainda o usa
+if ((Test-Path $dll) -and -not (Get-ChildItem $eng -Filter 'backup-*.json')) { & regsvr32.exe /s /u $dll; "APO desregistrado" }
