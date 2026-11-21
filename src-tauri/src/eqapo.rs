@@ -176,7 +176,7 @@ mod tests {
         assert!(!txt.contains("SR_M"), "estéreo melhorado desligado por padrão");
         assert!(txt.contains("Copy: SR_XL=R SR_XR=L"));
         assert!(txt.contains("Delay: 0.325 ms"));
-        assert!(txt.contains("Filter: ON LSC Fc 105 Hz Gain 2.4 dB"));
+        assert!(txt.contains("Filter: ON LSC Fc 105 Hz Gain 1.4 dB"));
         assert!(!txt.contains("Fc 125 Hz"), "EQ plano não gera filtro");
     }
 

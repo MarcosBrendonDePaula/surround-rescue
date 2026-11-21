@@ -33,7 +33,8 @@ fn config_path() -> std::path::PathBuf {
 fn load() -> Config {
     fs::read_to_string(config_path())
         .ok()
-        .and_then(|t| serde_json::from_str::<Config>(&t).ok())
+        // arquivo editado à mão pode vir com BOM (ex.: PowerShell): ignora a marca
+        .and_then(|t| serde_json::from_str::<Config>(t.trim_start_matches('\u{feff}')).ok())
         .unwrap_or_default()
         .normalized()
 }

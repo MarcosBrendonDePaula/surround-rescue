@@ -28,14 +28,15 @@ pub struct Compressor {
 
 impl Compressor {
     pub fn new(sr: f64) -> Self {
-        Compressor { threshold_db: 0.0, ratio: 1.0, knee_db: 6.0, makeup_db: 0.0, att: coef(5.0, sr), rel: coef(120.0, sr), env_db: -120.0 }
+        Compressor { threshold_db: 0.0, ratio: 1.0, knee_db: 6.0, makeup_db: 0.0, att: coef(80.0, sr), rel: coef(400.0, sr), env_db: -120.0 }
     }
 
     /// Nível 0..=100 da "Normalização de som": quanto maior, mais segura explosões.
     pub fn set_level(&mut self, level: f64) {
         let l = level.clamp(0.0, 100.0) / 100.0;
-        self.threshold_db = -6.0 - 24.0 * l; // -6 a -30 dBFS
-        self.ratio = 1.5 + 6.5 * l; // 1.5:1 a 8:1
+        // lento e suave (nivelador): não "bombeia" a cada batida de graves; picos rápidos ficam com o limitador
+        self.threshold_db = -10.0 - 14.0 * l; // -10 a -24 dBFS
+        self.ratio = 1.5 + 2.5 * l; // 1.5:1 a 4:1
         self.makeup_db = 0.0; // sem ganho de compensação: o objetivo é segurar picos
     }
 

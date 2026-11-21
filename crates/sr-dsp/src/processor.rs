@@ -88,7 +88,9 @@ impl Processor {
         self.enabled = s.enabled;
         let eq_max = if s.eq_enabled { s.eq.iter().cloned().fold(0.0, f64::max) } else { 0.0 };
         let boost = s.bass_db().max(s.presence_db()).max(s.voice_db()).max(eq_max).max(0.0);
-        let headroom = boost + 20.0 * (1.0 + s.cross_gain()).log10() + 20.0 * s.width().log10() + 1.0;
+        // folga antes dos filtros: 3 dB fixos (como a Razer) + metade do maior reforço; o resto dos picos
+        // fica com o limitador. Antes era o reforço inteiro: aumentar o graves abaixava todo o resto.
+        let headroom = 3.0 + 0.5 * boost + 20.0 * (1.0 + s.cross_gain()).log10() + 20.0 * s.width().log10();
         self.pre.target = db_to_lin(s.volume_db - headroom);
         self.width.target = s.width();
         self.cross.target = s.cross_gain();
@@ -332,8 +334,8 @@ mod tests {
             rms_db(&l[24000..])
         };
         let diff = measure(&mut eq) - measure(&mut base);
-        // +6 dB na banda, descontada a reserva automática de 6 dB do anti-estouro
-        assert!(diff.abs() < 0.5, "diferença {diff}");
+        // +6 dB na banda, descontada a folga extra (metade do reforço = 3 dB): sobra +3 dB
+        assert!((diff - 3.0).abs() < 0.5, "diferença {diff}");
         let mut s2 = s.clone();
         s2.eq[5] = 0.0;
         s2.eq[9] = 6.0; // reserva igual, mas sem reforço em 1 kHz

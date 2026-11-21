@@ -103,7 +103,8 @@ impl Settings {
     }
 
     pub fn bass_db(&self) -> f64 {
-        if self.bass_enabled { self.bass_level / 100.0 * 12.0 } else { 0.0 }
+        // até +7 dB: mais que isso o graves empurra tudo para o limitador (a Razer/Nahimic usa ~5 dB)
+        if self.bass_enabled { self.bass_level / 100.0 * 7.0 } else { 0.0 }
     }
     pub fn presence_db(&self) -> f64 {
         if self.clarity_enabled { self.clarity_presence / 100.0 * 6.0 } else { 0.0 }
