@@ -268,6 +268,11 @@ fn show(app: &AppHandle) {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
+    // o mesmo .exe é o executor de plugins (processo separado: plugin com defeito não derruba a janela)
+    if args.get(1).is_some_and(|a| sr_host::MODES.contains(&a.as_str())) {
+        sr_host::entry(args);
+        return;
+    }
     if let Some(code) = devices::handle_cli(&args) {
         std::process::exit(code);
     }

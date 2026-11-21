@@ -175,27 +175,21 @@ pub fn bridge32_installed() -> bool {
     d.join("sr-bridge32.exe").is_file() || d.join(r"..\i686-pc-windows-msvc\release\sr-bridge32.exe").is_file()
 }
 
+/// O executor é o próprio app chamado com `--host`/`--scan`/`--apps`.
 pub fn host_exe() -> Option<PathBuf> {
-    let me = std::env::current_exe().ok()?;
-    let dir = me.parent()?;
-    for c in [dir.join("sr-host.exe"), dir.join(r"..\..\..\target\release\sr-host.exe"), dir.join(r"..\..\target\release\sr-host.exe")] {
-        if c.exists() {
-            return Some(c);
-        }
-    }
-    None
+    std::env::current_exe().ok()
 }
 
 /// Procura plugins nas pastas padrão e nas `extra` (pastas escolhidas pelo usuário).
 pub fn scan(extra: Vec<String>) -> Result<Vec<Found>, String> {
-    let exe = host_exe().ok_or("Executor de VST (sr-host.exe) não encontrado.")?;
+    let exe = host_exe().ok_or("Executor de plugins não encontrado.")?;
     let out = hidden(Command::new(exe).arg("--scan").args(extra.iter().filter(|d| std::path::Path::new(d).is_dir()))).output().map_err(|e| e.to_string())?;
     serde_json::from_slice(&out.stdout).map_err(|e| format!("Resposta inválida do executor: {e}"))
 }
 
 /// Programas tocando som agora (para a caixa "Programa" do fluxo).
 pub fn audio_apps() -> Result<Vec<String>, String> {
-    let exe = host_exe().ok_or("Executor de VST (sr-host.exe) não encontrado.")?;
+    let exe = host_exe().ok_or("Executor de plugins não encontrado.")?;
     let out = hidden(Command::new(exe).arg("--apps")).output().map_err(|e| e.to_string())?;
     serde_json::from_slice(&out.stdout).map_err(|e| format!("Resposta inválida do executor: {e}"))
 }
@@ -218,7 +212,7 @@ impl HostProcess {
         let alive = g.as_mut().map(|c| matches!(c.try_wait(), Ok(None))).unwrap_or(false);
         if any && !alive {
             if let Some(exe) = host_exe() {
-                *g = hidden(&mut Command::new(exe)).spawn().ok();
+                *g = hidden(Command::new(exe).arg("--host")).spawn().ok();
             }
         } else if !any && alive {
             if let Some(mut c) = g.take() {

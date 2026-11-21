@@ -656,8 +656,16 @@ fn test_capture(what: &str, secs: u64) {
     println!("capturado: {:.2} s de áudio a 48 kHz | nível RMS {rms:.4} | pico {peak:.3} | frequência ≈ {freq:.0} Hz", n as f64 / 48000.0);
 }
 
+/// Modos que o app repassa para o executor (`surround-rescue.exe --host`, `--scan`…).
+pub const MODES: &[&str] = &["--host", "--scan", "--test", "--apps", "--capture"];
+
+#[allow(dead_code)]
 fn main() {
-    let args: Vec<String> = std::env::args().collect();
+    entry(std::env::args().collect());
+}
+
+/// Ponto de entrada do executor (do sr-host.exe ou do próprio app com `--host`).
+pub fn entry(args: Vec<String>) {
     match args.get(1).map(|s| s.as_str()) {
         Some("--apps") => return println!("{}", serde_json::to_string(&capture::audio_apps()).unwrap()),
         Some("--capture") => return test_capture(args.get(2).expect("informe o .exe"), args.get(3).and_then(|s| s.parse().ok()).unwrap_or(5)),
