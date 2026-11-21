@@ -85,6 +85,10 @@ pub struct Processor {
     test_n: u64,
     test_seed: u32,
     test_lp: f64,
+    // corda dedilhada (Karplus-Strong) do som de teste
+    ks: Vec<f64>,
+    ks_len: usize,
+    ks_pos: usize,
     bass: BassBoost,
     filters: [[Biquad; 13]; 2],
     n_filters: usize,
@@ -109,6 +113,9 @@ impl Processor {
             test_n: 0,
             test_seed: 1,
             test_lp: 0.0,
+            ks: vec![0.0; (sr / 60.0) as usize + 2],
+            ks_len: 2,
+            ks_pos: 0,
             bass: BassBoost::new(sr),
             filters: [[Biquad::default(); 13]; 2],
             n_filters: 0,
@@ -270,9 +277,12 @@ impl Processor {
         (l as f32, r as f32)
     }
 
-    /// Uma amostra do teste de calibração: rajadas de ruído (250 ms ligado, 150 ms desligado),
-    /// com subida/descida de 5 ms para não estalar. `test` = 7 passa por todas as caixas (1,2 s cada).
+    /// Uma amostra do teste de calibração: uma nota de violão sintetizada (corda dedilhada,
+    /// Karplus-Strong) a cada 0,6 s, cada caixa com a sua nota. O ataque da corda tem agudos (ajuda a
+    /// localizar) e a nota soa agradável, sem o chiado de ruído. `test` = 7 passa por todas (1,2 s cada).
     fn test_tick(&mut self) -> (f64, f64) {
+        // acorde de dó maior espalhado: cada caixa uma nota
+        const NOTES: [f64; 7] = [261.63, 329.63, 392.00, 196.00, 246.94, 164.81, 220.00];
         let sr = self.sr;
         let n = self.test_n;
         self.test_n += 1;
@@ -282,15 +292,28 @@ impl Processor {
         } else {
             self.test as usize
         };
-        let period = (0.4 * sr) as u64;
-        let t = (n % period) as f64 / sr;
-        let env = if t < 0.25 { (t / 0.005).min(1.0).min((0.25 - t) / 0.005) } else { 0.0 };
-        self.test_seed = self.test_seed.wrapping_mul(1664525).wrapping_add(1013904223);
-        let white = (self.test_seed >> 8) as f64 / 16777216.0 * 2.0 - 1.0;
-        // ruído um pouco mais escuro (menos chiado no agudo, mais fácil de localizar)
-        self.test_lp = white + 0.3 * (self.test_lp - white);
+        let period = (0.6 * sr) as u64;
+        if n % period == 0 {
+            // dedilha: enche a corda com um ruído curto e suavizado (o "toque" do dedo)
+            self.ks_len = ((sr / NOTES[spk]) as usize).clamp(2, self.ks.len());
+            let mut lp = 0.0;
+            for i in 0..self.ks_len {
+                self.test_seed = self.test_seed.wrapping_mul(1664525).wrapping_add(1013904223);
+                let w = (self.test_seed >> 8) as f64 / 16777216.0 * 2.0 - 1.0;
+                lp = w + 0.5 * (lp - w);
+                self.ks[i] = lp;
+            }
+            self.ks_pos = 0;
+        }
+        // corda: média das duas amostras vizinhas, com perda (a nota morre em ~1 s)
+        let len = self.ks_len;
+        let i = self.ks_pos;
+        let j = (i + 1) % len;
+        let y = self.ks[i];
+        self.ks[i] = 0.4985 * (self.ks[i] + self.ks[j]);
+        self.ks_pos = j;
         let mut ch = [0.0; crate::surround::SPEAKERS];
-        ch[spk] = 0.18 * env * self.test_lp;
+        ch[spk] = 0.35 * y;
         self.virt.render(ch, 0.0)
     }
 

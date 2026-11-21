@@ -583,3 +583,16 @@ h1 { margin-top: 0; }
 .gd-tips span { color: var(--soft); }
 .gd-nav { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
 .gd-nav [hidden] { display: none; }
+
+/* guia: calibração */
+.gd-cal { display: grid; grid-template-columns: 230px 1fr; gap: 22px; align-items: center; margin-top: 10px; }
+.gd-ring { position: relative; width: 230px; height: 230px; border-radius: 50%; background: var(--surface); border: 1px solid var(--line); }
+.gd-head { position: absolute; left: 50%; top: 50%; width: 34px; height: 40px; transform: translate(-50%, -50%); border-radius: 50%; background: var(--ink); opacity: .9; }
+.gd-spk { position: absolute; width: 38px; height: 26px; transform: translate(-50%, -50%); border-radius: 7px; border: 0; background: var(--amber); color: var(--amber-ink);
+  font: 700 11px var(--display); cursor: pointer; transition: left .15s, top .15s, box-shadow .15s; }
+.gd-spk:hover { box-shadow: 0 0 0 3px color-mix(in srgb, var(--amber) 35%, transparent); }
+.gd-spk.on { background: var(--ink); color: var(--night); box-shadow: 0 0 0 4px var(--amber), 0 0 18px var(--amber); }
+.gd-slider { display: grid; grid-template-columns: 1fr auto; gap: 2px 8px; margin-bottom: 12px; }
+.gd-slider span { color: var(--ink); }
+.gd-slider output { font: 600 14px var(--display); color: var(--amber); }
+.gd-slider input { grid-column: 1 / -1; }

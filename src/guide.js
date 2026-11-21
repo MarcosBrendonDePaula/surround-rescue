@@ -40,10 +40,42 @@
       <p class="desc" id="gd-msg"></p>`;
   }
 
+  // caixas virtuais: [id, índice no motor, ângulo usado (ou null = centro), lado]
+  const CAL = [["FL", 0, "front_angle", -1], ["FR", 1, "front_angle", 1], ["C", 2, null, 0], ["SL", 3, "side_angle", -1],
+    ["SR", 4, "side_angle", 1], ["RL", 5, "rear_angle", -1], ["RR", 6, "rear_angle", 1]];
+  const CAL_NAMES = { FL: "Frente esq.", FR: "Frente dir.", C: "Centro", SL: "Lateral esq.", SR: "Lateral dir.", RL: "Trás esq.", RR: "Trás dir." };
+  let playing = -1;
+
   function stepCalib() {
-    return `<p class="desc">Cada cabeça é diferente. Toque o teste e veja se o som parece vir de cada lugar em volta de você.</p>
-      <div class="gd-row"><button class="pill solid" id="gd-round">Dar a volta</button><button class="pill" id="gd-stop">Parar</button></div>
-      <p class="desc">Se alguma caixa parecer fora do lugar, depois ajuste na aba <b>Som</b>: clique numa caixa para ouvir e arraste até o som vir de lá.</p>`;
+    const s = cur();
+    const slider = (k, label, min, max) => `<label class="gd-slider"><span>${label}</span><output id="gd-o-${k}">${s[k]}°</output>
+      <input type="range" min="${min}" max="${max}" step="1" value="${s[k]}" data-gd="${k}"></label>`;
+    return `<p class="desc">Clique numa caixa: uma nota toca só nela. Se o som não parecer vir de onde a caixa está, mexa no ângulo daquele par até parecer.</p>
+      <div class="gd-cal">
+        <div class="gd-ring" id="gd-ring">${CAL.map(([id, i]) => `<button class="gd-spk" data-gd-spk="${i}" title="${CAL_NAMES[id]}">${id}</button>`).join("")}<span class="gd-head"></span></div>
+        <div class="gd-sliders">
+          ${slider("front_angle", "Frente", 10, 80)}${slider("side_angle", "Laterais", 60, 120)}${slider("rear_angle", "Trás", 110, 175)}
+          <div class="gd-row"><button class="pill solid" id="gd-round">Dar a volta</button><button class="pill" id="gd-stop">Parar</button></div>
+        </div>
+      </div>`;
+  }
+
+  function placeSpeakers() {
+    const s = cur();
+    document.querySelectorAll("[data-gd-spk]").forEach((b) => {
+      const [, , k, side] = CAL[Number(b.dataset.gdSpk)];
+      const deg = k ? side * s[k] : 0;
+      const t = (deg * Math.PI) / 180, r = 42;
+      b.style.left = `${50 + Math.sin(t) * r}%`;
+      b.style.top = `${50 - Math.cos(t) * r}%`;
+      b.classList.toggle("on", Number(b.dataset.gdSpk) === playing);
+    });
+  }
+
+  function play(i) {
+    playing = i;
+    invoke("engine_test", { speaker: i }).catch(() => {});
+    placeSpeakers();
   }
 
   function stepDone() {
@@ -70,8 +102,22 @@
 
   function bindStep() {
     q("#gd-install")?.addEventListener("click", install);
-    q("#gd-round")?.addEventListener("click", () => invoke("engine_test", { speaker: 7 }).catch(() => {}));
-    q("#gd-stop")?.addEventListener("click", () => invoke("engine_test", { speaker: -1 }).catch(() => {}));
+    q("#gd-round")?.addEventListener("click", () => play(7));
+    q("#gd-stop")?.addEventListener("click", () => play(-1));
+    document.querySelectorAll("[data-gd-spk]").forEach((b) => b.addEventListener("click", () => play(playing === Number(b.dataset.gdSpk) ? -1 : Number(b.dataset.gdSpk))));
+    document.querySelectorAll("[data-gd]").forEach((el) => el.addEventListener("input", () => {
+      const k = el.dataset.gd;
+      cur()[k] = Number(el.value);
+      if (typeof fillPct === "function") fillPct(el);
+      q(`#gd-o-${k}`).textContent = `${el.value}°`;
+      placeSpeakers();
+      saveSoon();
+      // mexeu num par: toca uma caixa dele para conferir
+      const i = CAL.findIndex(([, , key, side]) => key === k && side === 1);
+      if (playing !== i && playing !== 7) play(i);
+    }));
+    if (q("#gd-ring")) placeSpeakers();
+    if (typeof fillPct === "function") document.querySelectorAll("[data-gd]").forEach(fillPct);
   }
 
   async function saveDevices() {
@@ -79,7 +125,7 @@
     if (!o) return;
     snap.config.output_device = o.value || null;
     snap.config.input_device = i?.value || null;
-    try { snap = await invoke("set_config", { config: snap.config }); } catch (e) { /* segue: Configurações mostra o erro */ }
+    try { { const r = await invoke("set_config", { config: snap.config }); if (r && r.config) snap = r; } } catch (e) { /* segue: Configurações mostra o erro */ }
   }
 
   async function install() {
@@ -94,7 +140,7 @@
       await invoke("set_engine", { on: true, items });
       // o motor próprio passa a valer (o Equalizer APO fica em espera)
       snap.config.own_engine = true;
-      snap = await invoke("set_config", { config: snap.config });
+      { const r = await invoke("set_config", { config: snap.config }); if (r && r.config) snap = r; }
     } catch (e) {
       q("#gd-msg").textContent = `Não deu certo: ${e}`;
     }
@@ -116,7 +162,7 @@
   }
 
   function close() {
-    invoke("engine_test", { speaker: -1 }).catch(() => {});
+    play(-1);
     q("#guide").hidden = true;
     try { localStorage.setItem(DONE_KEY, "1"); } catch (e) { /* sem armazenamento: abre de novo na próxima vez */ }
   }
@@ -125,12 +171,12 @@
   window.addEventListener("load", () => {
     q("#gd-next").addEventListener("click", async () => {
       if (G.step === 0) await saveDevices();
-      if (G.step === 2) invoke("engine_test", { speaker: -1 }).catch(() => {});
+      if (G.step === 2) play(-1);
       if (G.step === STEPS.length - 1) return close();
       G.step++;
       render();
     });
-    q("#gd-back").addEventListener("click", () => { G.step = Math.max(0, G.step - 1); render(); });
+    q("#gd-back").addEventListener("click", () => { if (G.step === 2) play(-1); G.step = Math.max(0, G.step - 1); render(); });
     q("#gd-close").addEventListener("click", close);
     q("#guide-open").addEventListener("click", open);
     let done = false;
