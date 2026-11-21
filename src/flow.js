@@ -146,8 +146,14 @@ const devFull = (d) => (d.device ? `${d.name} (${d.device})` : d.name);
 /// Título, subtítulo e ícone de cada caixa.
 function nodeInfo(n) {
   switch (n.kind) {
-    case "input": return ["Windows", "som de todos os programas", "♪"];
-    case "output": return ["Saída", "Surround Rescue + anti-estouro", "◉"];
+    case "input": {
+      const d = devName(owner());
+      return d?.kind === "Microfone" ? [`Voz: ${d.device || d.name}`, "o que o microfone capta", "🎙"] : ["Windows", "som de todos os programas", "♪"];
+    }
+    case "output": {
+      const d = devName(owner());
+      return d?.kind === "Microfone" ? ["Saída do microfone", "o que o Discord e os outros programas recebem", "◉"] : ["Saída", d ? `toca em ${d.device || d.name}` : "Surround Rescue + anti-estouro", "◉"];
+    }
     case "mixer": return ["Mixer", "soma o que chega", "Σ"];
     case "app": return [n.exe || "Programa", "som só deste programa", "▶"];
     case "listen": { const d = devName(n.device); return [d ? `Ouvir: ${d.device || d.name}` : "Ouvir saída", d ? `${d.name} · tudo o que toca nela` : "escolha a saída", "👂"]; }
