@@ -7,9 +7,6 @@ fn coef(ms: f64, sr: f64) -> f64 {
     (-1.0 / (ms.max(0.01) * 0.001 * sr)).exp()
 }
 
-fn to_db(x: f64) -> f64 {
-    20.0 * x.max(1e-9).log10()
-}
 
 fn from_db(db: f64) -> f64 {
     10f64.powf(db / 20.0)

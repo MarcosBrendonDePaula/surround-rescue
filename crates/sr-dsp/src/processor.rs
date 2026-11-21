@@ -10,10 +10,12 @@
 
 use crate::biquad::{Biquad, Coefs, Kind};
 use crate::dynamics::{Compressor, Limiter};
+use crate::bass::BassBoost;
+use crate::nr::NoiseReducer;
 use crate::surround::Virtualizer;
+use crate::upmix::Upmix;
 use crate::{MicSettings, Settings, EQ_FREQS};
 
-const DELAY_LEN: usize = 1024; // > 0,65 ms a 384 kHz
 const CEILING_DB: f64 = -1.0;
 
 fn db_to_lin(db: f64) -> f64 {
@@ -46,6 +48,9 @@ pub struct Processor {
     width: Smoothed,
     vmix: Smoothed,
     virt: Virtualizer,
+    upmix: Upmix,
+    upmix_on: bool,
+    bass: BassBoost,
     filters: [[Biquad; 13]; 2],
     n_filters: usize,
     comp: Compressor,
@@ -63,6 +68,9 @@ impl Processor {
             width: Smoothed::new(1.0, sr),
             vmix: Smoothed::new(0.0, sr),
             virt: Virtualizer::new(sr),
+            upmix: Upmix::new(sr),
+            upmix_on: false,
+            bass: BassBoost::new(sr),
             filters: [[Biquad::default(); 13]; 2],
             n_filters: 0,
             comp: Compressor::new(sr),
@@ -77,9 +85,9 @@ impl Processor {
         self.sr
     }
 
-    /// Atraso em amostras (só a antecipação do limitador).
+    /// Atraso em amostras: antecipação do limitador + análise por frequência (com surround ligado).
     pub fn latency(&self) -> usize {
-        self.limiter.latency()
+        self.limiter.latency() + if self.upmix_on { self.upmix.latency() } else { 0 }
     }
 
     /// Aplica novas configurações. Pode ser chamado a qualquer momento (sem alocação).
@@ -98,6 +106,14 @@ impl Processor {
         // 0..100: 50 = ambiente padrão; 100 = o dobro
         self.virt.amb_gain = s.spatial / 50.0;
         self.virt.room_gain = s.spatial / 50.0;
+        let was = self.upmix_on;
+        self.upmix_on = s.spatial > 0.0;
+        if self.upmix_on && !was {
+            self.upmix.reset();
+        }
+        // com surround, a clareza realça só a voz extraída no centro
+        self.upmix.set_clarity(self.sr, s.presence_db().max(s.voice_db()).max(0.0) + if s.clarity_enabled { 2.0 } else { 0.0 });
+        self.bass.set(s.bass_db());
 
         let mut list: [Option<Coefs>; 13] = [None; 13];
         let mut n = 0;
@@ -105,13 +121,11 @@ impl Processor {
             list[n] = Some(c);
             n += 1;
         };
-        if s.bass_db() > 0.0 {
-            push(Coefs::new(Kind::LowShelf, self.sr, 105.0, s.bass_db(), 0.707));
-        }
-        if s.presence_db() != 0.0 {
+        let spatial = s.spatial > 0.0;
+        if s.presence_db() != 0.0 && !(spatial && s.presence_db() > 0.0) {
             push(Coefs::new(Kind::Peaking, self.sr, 3000.0, s.presence_db(), 1.2));
         }
-        if s.voice_db() != 0.0 {
+        if s.voice_db() != 0.0 && !(spatial && s.voice_db() > 0.0) {
             push(Coefs::new(Kind::Peaking, self.sr, 1000.0, s.voice_db(), 0.5));
         }
         if s.eq_enabled {
@@ -172,7 +186,15 @@ impl Processor {
                     buf[1] = r as f32;
                     self.virt.multi(&buf[..f.len().min(8)])
                 }
-                None => self.virt.stereo(l, r),
+                None => {
+                    // centro e ambiente por frequência; o seco sai da mesma análise (mesmo atraso)
+                    let [fl, fr, c, al, ar] = self.upmix.process(l as f32, r as f32);
+                    let (fl, fr, c) = (fl as f64, fr as f64, c as f64);
+                    let dry = (fl + c * std::f64::consts::FRAC_1_SQRT_2, fr + c * std::f64::consts::FRAC_1_SQRT_2);
+                    l = dry.0;
+                    r = dry.1;
+                    self.virt.upmixed(fl, fr, c, al as f64, ar as f64)
+                }
             };
             l = (1.0 - k) * l + k * vl;
             r = (1.0 - k) * r + k * vr;
@@ -184,6 +206,7 @@ impl Processor {
             r += c + gg(5) + gg(7);
         }
 
+        (l, r) = self.bass.process(l, r);
         for f in &mut self.filters[0][..self.n_filters] {
             l = f.process(l);
         }
@@ -243,6 +266,8 @@ pub struct MicProcessor {
     filters: [Biquad; 2],
     n: usize,
     limiter: Limiter,
+    nr: NoiseReducer,
+    nr_on: bool,
 }
 
 impl MicProcessor {
@@ -262,6 +287,8 @@ impl MicProcessor {
             filters: [Biquad::default(); 2],
             n: 0,
             limiter: Limiter::new(sr, CEILING_DB),
+            nr: NoiseReducer::new(sr),
+            nr_on: false,
         };
         m.set(&MicSettings::default(), sr);
         m
@@ -270,6 +297,11 @@ impl MicProcessor {
     pub fn set(&mut self, m: &MicSettings, sr: f64) {
         self.enabled = m.enabled;
         self.gate_on = m.gate;
+        if m.noise_reduction && !self.nr_on {
+            self.nr.reset();
+        }
+        self.nr_on = m.noise_reduction;
+        self.nr.set_amount_db(m.nr_db);
         self.gate_thr = 10f64.powf(m.gate_db.clamp(-80.0, -10.0) / 20.0);
         let clarity_db = m.clarity.clamp(0.0, 100.0) / 100.0 * 6.0;
         self.gain.target = db_to_lin(m.gain_db.clamp(-10.0, 10.0) + if m.boost { 10.0 } else { 0.0 });
@@ -293,6 +325,9 @@ impl MicProcessor {
             let mut v = *x as f64;
             for f in &mut self.filters[..self.n] {
                 v = f.process(v);
+            }
+            if self.nr_on {
+                v = self.nr.process(v as f32) as f64;
             }
             if self.gate_on {
                 // seguidor de pico; porta abre rápido (2 ms) e fecha devagar (150 ms), até -30 dB
@@ -346,9 +381,13 @@ mod tests {
     #[test]
     fn latency_is_only_the_limiter_lookahead() {
         let mut p = Processor::new(48000.0);
-        p.set(&Settings { eq: [3.0, -2.0, 1.0, 0.0, 4.0, 0.0, -3.0, 2.0, 0.0, 1.0], eq_enabled: true, ..Settings::default() });
+        p.set(&Settings { eq: [3.0, -2.0, 1.0, 0.0, 4.0, 0.0, -3.0, 2.0, 0.0, 1.0], eq_enabled: true, spatial: 0.0, ..Settings::default() });
         let la = p.latency();
         assert_eq!(la, 72, "1,5 ms a 48 kHz");
+        // com surround, soma a análise por frequência (512 amostras = 10,7 ms)
+        let mut q = Processor::new(48000.0);
+        q.set(&Settings::default());
+        assert_eq!(q.latency(), 72 + 512);
         let mut l = vec![0.0f32; 256];
         let mut r = vec![0.0f32; 256];
         l[0] = 0.5;
@@ -409,8 +448,8 @@ mod tests {
         let sr = 48000.0;
         let mut p = Processor::new(sr);
         p.set(&Settings { front_angle: 90.0, spatial: 100.0, ..flat() });
-        let mut l = vec![0.0f32; 200];
-        let mut r = vec![0.0f32; 200];
+        let mut l = vec![0.0f32; 3000];
+        let mut r = vec![0.0f32; 3000];
         l[0] = 0.5;
         p.process_stereo(&mut l, &mut r);
         let on = |x: &[f32]| {
@@ -418,9 +457,9 @@ mod tests {
             x.iter().position(|v| v.abs() > 0.3 * m).unwrap()
         };
         let (fl, fr) = (on(&l), on(&r));
-        // caixa a 60° (máximo): o ouvido oposto ouve ~0,5 ms depois (≈ 24 amostras)
+        // caixa a 60° (máximo): o ouvido oposto ouve ~0,5–0,9 ms depois (medido no KEMAR)
         let itd = fr - fl;
-        assert!((18..=30).contains(&itd), "diferença {itd}");
+        assert!((18..=45).contains(&itd), "diferença {itd}");
     }
 
     #[test]
@@ -441,13 +480,13 @@ mod tests {
     fn mic_chain() {
         let sr = 48000.0;
         let mut m = MicProcessor::new(sr);
-        m.set(&MicSettings { enabled: true, boost: true, gain_db: 10.0, rumble_filter: true, clarity: 50.0, gate: false, gate_db: -45.0 }, sr);
+        m.set(&MicSettings { enabled: true, boost: true, gain_db: 10.0, rumble_filter: true, clarity: 50.0, gate: false, gate_db: -45.0, noise_reduction: false, nr_db: 12.0 }, sr);
         let mut x = sine(1000.0, sr, 4800, 0.9);
         m.process(&mut x);
         assert!(x.iter().all(|v| v.abs() <= 0.8913 + 1e-4));
         let mut hum = sine(30.0, sr, 48000, 0.05);
         let before = rms_db(&hum);
-        m.set(&MicSettings { enabled: true, boost: false, gain_db: 0.0, rumble_filter: true, clarity: 0.0, gate: false, gate_db: -45.0 }, sr);
+        m.set(&MicSettings { enabled: true, boost: false, gain_db: 0.0, rumble_filter: true, clarity: 0.0, gate: false, gate_db: -45.0, noise_reduction: false, nr_db: 12.0 }, sr);
         m.process(&mut hum);
         assert!(before - rms_db(&hum[24000..]) > 10.0, "filtro de graves deveria cortar 30 Hz");
     }
@@ -502,7 +541,7 @@ mod razer_parity_tests {
         let sr = 48000.0;
         let run = |amp: f64| {
             let mut m = MicProcessor::new(sr);
-            m.set(&MicSettings { enabled: true, boost: false, gain_db: 0.0, rumble_filter: false, clarity: 0.0, gate: true, gate_db: -45.0 }, sr);
+            m.set(&MicSettings { enabled: true, boost: false, gain_db: 0.0, rumble_filter: false, clarity: 0.0, gate: true, gate_db: -45.0, noise_reduction: false, nr_db: 12.0 }, sr);
             let mut x: Vec<f32> = sine(400.0, sr, 48000, amp).iter().map(|v| *v as f32).collect();
             m.process(&mut x);
             // depois de 0,5 s (a porta fecha devagar, para não cortar o fim das palavras)

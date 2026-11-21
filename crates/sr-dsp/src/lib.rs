@@ -7,7 +7,11 @@
 pub mod biquad;
 pub mod dynamics;
 pub mod processor;
+pub mod bass;
 pub mod hrir_kemar;
+pub mod nr;
+pub mod stft;
+pub mod upmix;
 pub mod surround;
 
 pub use processor::{MicProcessor, Processor};
@@ -150,11 +154,15 @@ pub struct MicSettings {
     pub gate: bool,
     /// Abaixo deste nível (dBFS) a porta fecha
     pub gate_db: f64,
+    /// Redução de ruído de fundo por frequência (ventilador, chiado)
+    pub noise_reduction: bool,
+    /// Quanto abaixar o ruído, em dB
+    pub nr_db: f64,
 }
 
 impl Default for MicSettings {
     fn default() -> Self {
-        MicSettings { enabled: false, boost: false, gain_db: 0.0, rumble_filter: true, clarity: 30.0, gate: true, gate_db: -45.0 }
+        MicSettings { enabled: false, boost: false, gain_db: 0.0, rumble_filter: true, clarity: 30.0, gate: true, gate_db: -45.0, noise_reduction: true, nr_db: 12.0 }
     }
 }
 

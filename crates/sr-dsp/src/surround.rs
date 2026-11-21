@@ -42,6 +42,30 @@ fn hrir_at(az: f64, sr: f64) -> ([f32; MAX_TAPS], [f32; MAX_TAPS], usize) {
     (out[0], out[1], n)
 }
 
+/// Dois produtos escalares de uma vez (o mesmo histórico com os filtros dos dois ouvidos).
+/// Função separada e sem inline: o compilador vetoriza sempre do mesmo jeito.
+#[inline(never)]
+fn dot2(h: &[f32], a: &[f32], b: &[f32]) -> (f32, f32) {
+    let n = h.len().min(a.len()).min(b.len());
+    let (h, a, b) = (&h[..n], &a[..n], &b[..n]);
+    let mut sa = [0.0f32; 16];
+    let mut sb = [0.0f32; 16];
+    let (hc, ac, bc) = (h.chunks_exact(16), a.chunks_exact(16), b.chunks_exact(16));
+    let (ht, at, bt) = (hc.remainder(), ac.remainder(), bc.remainder());
+    for ((hh, aa), bb) in hc.zip(ac).zip(bc) {
+        for j in 0..16 {
+            sa[j] += hh[j] * aa[j];
+            sb[j] += hh[j] * bb[j];
+        }
+    }
+    let (mut ra, mut rb) = (sa.iter().sum::<f32>(), sb.iter().sum::<f32>());
+    for ((x, y), z) in ht.iter().zip(at).zip(bt) {
+        ra += x * y;
+        rb += x * z;
+    }
+    (ra, rb)
+}
+
 /// Sala curta (rede de 4 atrasos realimentados), como o "reverb" do Nahimic: tira o som de dentro da cabeça.
 struct Room {
     lines: [Vec<f32>; 4],
@@ -75,6 +99,10 @@ impl Room {
         for i in 0..4 {
             let v = 0.5 * h[i] * self.fb[i];
             self.lp[i] = v + self.damp[i] * (self.lp[i] - v);
+            // números minúsculos (denormais) deixam o processador até 100× mais lento no silêncio
+            if self.lp[i].abs() < 1e-18 {
+                self.lp[i] = 0.0;
+            }
             self.lines[i][self.pos[i]] = xin + self.lp[i];
             self.pos[i] = (self.pos[i] + 1) % self.lines[i].len();
         }
@@ -100,6 +128,7 @@ pub struct Virtualizer {
     amb_lp: [f64; 2],
     amb_k: f64,
     amb_buf: Vec<f64>,
+    amb_buf2: Vec<f64>,
     pos: usize,
     room: Room,
     /// Quanto de ambiente (laterais/traseiras) a entrada estéreo ganha (1 = padrão)
@@ -121,6 +150,7 @@ impl Virtualizer {
             amb_lp: [0.0; 2],
             amb_k: 0.0,
             amb_buf: vec![0.0; BUF],
+            amb_buf2: vec![0.0; BUF],
             pos: 0,
             room: Room::new(sr),
             amb_gain: 1.0,
@@ -157,26 +187,12 @@ impl Virtualizer {
             self.hist[i][p] = x;
             self.hist[i][p + n] = x;
         }
-        // 16 somas parciais por ouvido: o compilador transforma em instruções vetoriais
-        let mut acc = [[0.0f32; 16]; 2];
+        let mut out = [0.0f32; 2];
         for i in 0..SPEAKERS {
-            let h = &self.hist[i][p + 1..p + 1 + n];
-            let (il, ir) = (&self.ir[i][0][..n], &self.ir[i][1][..n]);
-            let (hc, lc, rc) = (h.chunks_exact(16), il.chunks_exact(16), ir.chunks_exact(16));
-            let (ht, lt, rt) = (hc.remainder(), lc.remainder(), rc.remainder());
-            for ((hh, ll), rr) in hc.zip(lc).zip(rc) {
-                let (hh, ll, rr): (&[f32; 16], &[f32; 16], &[f32; 16]) = (hh.try_into().unwrap(), ll.try_into().unwrap(), rr.try_into().unwrap());
-                for j in 0..16 {
-                    acc[0][j] += hh[j] * ll[j];
-                    acc[1][j] += hh[j] * rr[j];
-                }
-            }
-            for ((a, b), c) in ht.iter().zip(lt).zip(rt) {
-                acc[0][0] += a * b;
-                acc[1][0] += a * c;
-            }
+            let (a, b) = dot2(&self.hist[i][p + 1..p + 1 + n], &self.ir[i][0][..n], &self.ir[i][1][..n]);
+            out[0] += a;
+            out[1] += b;
         }
-        let out = [acc[0].iter().sum::<f32>(), acc[1].iter().sum::<f32>()];
         self.hpos = (p + 1) % n;
         // sala: entra a soma de tudo, sai pela frente, baixinha
         let (rl, rr) = self.room.process(mono * 0.25);
@@ -204,6 +220,19 @@ impl Virtualizer {
         self.render([l - 0.5 * c, r - 0.5 * c, c / 0.707, 0.7 * g * a[0], -0.7 * g * a[1], 0.5 * g * a[2], -0.5 * g * a[3]], 0.0)
     }
 
+    /// Entrada já separada pelo upmix (frente, centro e ambiente) → 7.1 virtual.
+    #[inline]
+    pub fn upmixed(&mut self, fl: f64, fr: f64, c: f64, al: f64, ar: f64) -> (f64, f64) {
+        self.amb_buf[self.pos] = al;
+        self.amb_buf2[self.pos] = ar;
+        let d = self.amb_delay;
+        let i = |x: usize| (self.pos + BUF - x) % BUF;
+        let a = [self.amb_buf[i(d[0])], self.amb_buf2[i(d[1])], self.amb_buf[i(d[2])], self.amb_buf2[i(d[3])]];
+        self.pos = (self.pos + 1) % BUF;
+        let g = self.amb_gain;
+        self.render([fl, fr, c, 0.8 * g * a[0], 0.8 * g * a[1], 0.6 * g * a[2], 0.6 * g * a[3]], 0.0)
+    }
+
     /// Quadro multicanal na ordem do Windows: FL FR C LFE BL BR SL SR (5.1: FL FR C LFE BL BR).
     #[inline]
     pub fn multi(&mut self, f: &[f32]) -> (f64, f64) {
@@ -218,6 +247,7 @@ impl Virtualizer {
     pub fn reset(&mut self) {
         self.hist.iter_mut().for_each(|h| h.iter_mut().for_each(|v| *v = 0.0));
         self.amb_buf.iter_mut().for_each(|v| *v = 0.0);
+        self.amb_buf2.iter_mut().for_each(|v| *v = 0.0);
         self.amb_lp = [0.0; 2];
         self.room.reset();
     }

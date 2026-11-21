@@ -40,4 +40,17 @@ fn main() {
     f.write_all(&h).unwrap();
     for s in pcm { f.write_all(&s.to_le_bytes()).unwrap(); }
     println!("gravado {out}");
+    // custo da cadeia inteira do fone (configuração padrão) e do microfone
+    let mut p = sr_dsp::Processor::new(sr);
+    p.set(&sr_dsp::Settings::default());
+    let mut buf: Vec<f32> = (0..480000 * 2).map(|i| ((i as f32 * 0.0137).sin() * 0.3)).collect();
+    let t = std::time::Instant::now();
+    p.process_interleaved(&mut buf, 2);
+    println!("fone, cadeia inteira: {:.2}% de um núcleo", t.elapsed().as_secs_f64() / 10.0 * 100.0);
+    let mut m = sr_dsp::MicProcessor::new(sr);
+    m.set(&sr_dsp::MicSettings { enabled: true, ..Default::default() }, sr);
+    let mut mb: Vec<f32> = (0..480000).map(|i| ((i as f32 * 0.02).sin() * 0.1)).collect();
+    let t = std::time::Instant::now();
+    m.process(&mut mb);
+    println!("microfone (1 canal): {:.2}% de um núcleo", t.elapsed().as_secs_f64() / 10.0 * 100.0);
 }
