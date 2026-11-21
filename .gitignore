@@ -9,3 +9,4 @@ src-tauri/target/
 src-tauri/gen/
 
 # instalador de terceiros (baixar de https://sourceforge.net/projects/equalizerapo/ para src-tauri/resources/)
+target/

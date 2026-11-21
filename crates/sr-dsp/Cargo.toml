@@ -1,0 +1,11 @@
+[package]
+name = "sr-dsp"
+version = "0.1.0"
+edition = "2021"
+description = "Motor de áudio do Surround Rescue: atraso zero, sem alocação no processamento"
+
+[dependencies]
+serde = { version = "1", features = ["derive"], optional = true }
+
+[features]
+default = ["serde"]

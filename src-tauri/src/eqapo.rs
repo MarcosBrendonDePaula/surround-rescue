@@ -2,123 +2,10 @@
 //! Funções puras: Settings -> texto. Toda a lógica de áudio fica aqui, testável.
 //! Os nomes dos campos seguem o Razer Surround (perfil XML do Synapse) para facilitar o uso.
 
-use serde::{Deserialize, Serialize};
-
-pub const EQ_FREQS: [u32; 10] = [31, 63, 125, 250, 500, 1000, 2000, 4000, 8000, 16000];
-
-/// Configurações de saída (fone) — equivalente a um perfil do Razer Surround.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(default)]
-pub struct Settings {
-    /// "Habilitar dispositivo de áudio virtual"
-    pub enabled: bool,
-    // ---- CALIBRAÇÃO ----
-    /// Ângulo das caixas frontais em graus (Razer: AngleFrontLeft = 30)
-    pub front_angle: f64,
-    /// Intensidade do som surround virtual 0..=100
-    pub spatial: f64,
-    // ---- ÁUDIO ----
-    /// "Estéreo melhorado" (WidenStereoSound)
-    pub stereo_enhanced: bool,
-    /// "Reforço de graves" (BassBoostEnabled / BassBoostLevel 0..100)
-    pub bass_enabled: bool,
-    pub bass_level: f64,
-    /// "Normalização de som" (CompressionEnabled / CompressorLevel 0..100)
-    pub normalization_enabled: bool,
-    pub normalization_level: f64,
-    /// "Clareza de voz" (ClarityEnabled, Nível de presença / Nível de volume -100..100)
-    pub clarity_enabled: bool,
-    pub clarity_presence: f64,
-    pub clarity_volume: f64,
-    /// Volume geral em dB (-30..=6)
-    pub volume_db: f64,
-    // ---- EQUALIZADOR ----
-    pub eq_enabled: bool,
-    pub eq_preset: String,
-    pub eq: [f64; 10],
-}
-
-impl Default for Settings {
-    fn default() -> Self {
-        Settings {
-            enabled: true,
-            front_angle: 30.0,
-            spatial: 50.0,
-            stereo_enhanced: false,
-            bass_enabled: true,
-            bass_level: 20.0,
-            normalization_enabled: true,
-            normalization_level: 20.0,
-            clarity_enabled: false,
-            clarity_presence: 0.0,
-            clarity_volume: 0.0,
-            volume_db: 0.0,
-            eq_enabled: true,
-            eq_preset: "padrao".into(),
-            eq: [0.0; 10],
-        }
-    }
-}
-
-/// Predefinições do equalizador (nome interno, rótulo, ganhos).
-pub fn eq_presets() -> Vec<(&'static str, &'static str, [f64; 10])> {
-    vec![
-        ("padrao", "Padrão", [0.0; 10]),
-        ("jogo", "Jogo (FPS)", [-2.0, -1.0, 0.0, -1.0, 0.0, 2.0, 4.0, 4.0, 2.0, 0.0]),
-        ("filme", "Filme", [3.0, 3.0, 2.0, 0.0, -1.0, 0.0, 1.0, 2.0, 2.0, 1.0]),
-        ("musica", "Música", [3.0, 2.0, 1.0, 0.0, -1.0, -1.0, 0.0, 1.0, 2.0, 3.0]),
-        ("voz", "Voz", [-4.0, -3.0, -1.0, 0.0, 2.0, 3.0, 3.0, 2.0, 0.0, -2.0]),
-        ("graves", "Reforço de graves", [6.0, 5.0, 4.0, 2.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]),
-        ("agudos", "Reforço de agudos", [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 2.0, 4.0, 5.0, 6.0]),
-    ]
-}
+pub use sr_dsp::{eq_presets, MicSettings, Settings, EQ_FREQS};
 
 fn clamp(v: f64, lo: f64, hi: f64) -> f64 {
     if v.is_nan() { lo.max(0.0).min(hi) } else { v.max(lo).min(hi) }
-}
-
-impl Settings {
-    pub fn sanitized(&self) -> Settings {
-        let mut s = self.clone();
-        s.front_angle = clamp(s.front_angle, 10.0, 90.0);
-        s.spatial = clamp(s.spatial, 0.0, 100.0);
-        s.bass_level = clamp(s.bass_level, 0.0, 100.0);
-        s.normalization_level = clamp(s.normalization_level, 0.0, 100.0);
-        s.clarity_presence = clamp(s.clarity_presence, -100.0, 100.0);
-        s.clarity_volume = clamp(s.clarity_volume, -100.0, 100.0);
-        s.volume_db = clamp(s.volume_db, -30.0, 6.0);
-        for g in s.eq.iter_mut() {
-            *g = clamp(*g, -12.0, 12.0);
-        }
-        s
-    }
-
-    fn bass_db(&self) -> f64 {
-        if self.bass_enabled { self.bass_level / 100.0 * 12.0 } else { 0.0 }
-    }
-    fn presence_db(&self) -> f64 {
-        if self.clarity_enabled { self.clarity_presence / 100.0 * 6.0 } else { 0.0 }
-    }
-    fn voice_db(&self) -> f64 {
-        if self.clarity_enabled { self.clarity_volume / 100.0 * 6.0 } else { 0.0 }
-    }
-    fn width(&self) -> f64 {
-        if self.stereo_enhanced { 1.4 } else { 1.0 }
-    }
-    /// Ganho do sinal cruzado (o ouvido oposto também ouve cada caixa).
-    fn cross_gain(&self) -> f64 {
-        let a = self.front_angle.to_radians();
-        // caixas mais abertas => menos sinal no ouvido oposto
-        self.spatial / 100.0 * 0.5 * (1.0 - 0.5 * a.sin())
-    }
-    /// Diferença de tempo entre ouvidos (ITD) para o ângulo das caixas, em ms.
-    fn cross_delay_ms(&self) -> f64 {
-        0.65 * self.front_angle.to_radians().sin()
-    }
-    /// Redução de volume extra da normalização: abaixa picos de efeitos altos.
-    fn normalization_db(&self) -> f64 {
-        if self.normalization_enabled { self.normalization_level / 100.0 * 6.0 } else { 0.0 }
-    }
 }
 
 fn db(x: f64) -> f64 {
@@ -182,33 +69,16 @@ pub fn generate(s: &Settings) -> String {
     if s.voice_db() != 0.0 {
         out.push_str(&format!("Filter: ON PK Fc 1000 Hz Gain {} dB Q 0.5\n", f(s.voice_db())));
     }
-    // Equalizador
-    if s.eq_enabled && s.eq.iter().any(|g| *g != 0.0) {
-        let pts: Vec<String> = EQ_FREQS.iter().zip(s.eq.iter()).map(|(fr, g)| format!("{} {}", fr, f(*g))).collect();
-        out.push_str(&format!("GraphicEQ: {}\n", pts.join("; ")));
+    // Equalizador: 10 filtros IIR (atraso zero), em vez do GraphicEQ (FIR, que soma latência)
+    if s.eq_enabled {
+        for (fr, g) in EQ_FREQS.iter().zip(s.eq.iter()) {
+            if *g != 0.0 {
+                out.push_str(&format!("Filter: ON PK Fc {} Hz Gain {} dB Q 1.41
+", fr, f(*g)));
+            }
+        }
     }
     out
-}
-
-/// Configurações do microfone (fora do Razer Surround; equivalente a AEC/MicBoost do Synapse).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(default)]
-pub struct MicSettings {
-    pub enabled: bool,
-    /// "Reforço do microfone" (+10 dB, MicBoostEnabled)
-    pub boost: bool,
-    /// Ganho fino em dB (-10..=10)
-    pub gain_db: f64,
-    /// Corta ruídos graves (ventilador, mesa) abaixo de 90 Hz
-    pub rumble_filter: bool,
-    /// Nitidez da voz 0..=100
-    pub clarity: f64,
-}
-
-impl Default for MicSettings {
-    fn default() -> Self {
-        MicSettings { enabled: false, boost: false, gain_db: 0.0, rumble_filter: true, clarity: 30.0 }
-    }
 }
 
 pub fn generate_mic(m: &MicSettings) -> String {
@@ -307,14 +177,17 @@ mod tests {
         assert!(txt.contains("Copy: SR_XL=R SR_XR=L"));
         assert!(txt.contains("Delay: 0.325 ms"));
         assert!(txt.contains("Filter: ON LSC Fc 105 Hz Gain 2.4 dB"));
-        assert!(!txt.contains("GraphicEQ"), "EQ plano não gera linha");
+        assert!(!txt.contains("Fc 125 Hz"), "EQ plano não gera filtro");
     }
 
     #[test]
     fn eq_generates_graphic_eq() {
         let mut s = Settings::default();
         s.eq[2] = 3.0;
-        assert!(generate(&s).contains("GraphicEQ: 31 0; 63 0; 125 3; 250 0"));
+        let t = generate(&s);
+        assert!(t.contains("Filter: ON PK Fc 125 Hz Gain 3 dB Q 1.41"));
+        assert!(!t.contains("GraphicEQ"));
+        assert!(!t.contains("Fc 63 Hz"));
     }
 
     #[test]
