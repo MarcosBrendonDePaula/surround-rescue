@@ -239,7 +239,12 @@ function flSaveSoon() {
     try {
       await invoke("set_chain", { endpoint: PL.device, chain: PL.chain });
       $("#error").hidden = true;
-    } catch (e) { $("#error").textContent = String(e); $("#error").hidden = false; }
+      const t = new Date().toLocaleTimeString("pt-BR");
+      $("#fl-saved").textContent = `Salvo ✓ às ${t}`;
+    } catch (e) {
+      $("#error").textContent = String(e); $("#error").hidden = false;
+      $("#fl-saved").textContent = "Não foi possível salvar (veja a mensagem em vermelho)";
+    }
   }, 250);
 }
 

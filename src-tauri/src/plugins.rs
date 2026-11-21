@@ -58,8 +58,10 @@ pub fn set_chain(endpoint: &str, chain: &Chain) -> Result<(), String> {
     }
     std::fs::create_dir_all(chains_dir()).map_err(|e| e.to_string())?;
     let f = chain_file(endpoint);
-    if chain.plugins.is_empty() {
-        let _ = std::fs::remove_file(&f); // sem plugins: o executor larga o dispositivo
+    // só apaga quando não há nada: nem plugins nem fluxo desenhado
+    // (um fluxo só com caixas — envio, captura, blocos — não tem plugins e precisa ser salvo)
+    if chain.plugins.is_empty() && chain.graph.is_none() {
+        let _ = std::fs::remove_file(&f);
         return Ok(());
     }
     let tmp = f.with_extension("tmp");
@@ -168,5 +170,9 @@ mod tests {
         assert_eq!(get_chain(ep).unwrap(), c);
         set_chain(ep, &Chain::default()).unwrap();
         assert!(!chain_file(ep).exists());
+        // fluxo sem plugins (só caixas) precisa ficar salvo
+        let only_boxes = Chain { plugins: vec![], graph: Some(serde_json::json!({ "nodes": [{ "id": "in", "kind": "input" }], "edges": [] })) };
+        set_chain(ep, &only_boxes).unwrap();
+        assert_eq!(get_chain(ep).unwrap(), only_boxes);
     }
 }
