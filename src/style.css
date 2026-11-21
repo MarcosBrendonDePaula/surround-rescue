@@ -315,3 +315,40 @@ pre { white-space: pre-wrap; font-size: 11.5px; color: var(--soft); background: 
 .strip.muted .fader, .strip.muted .strip-db { opacity: .35; }
 .strip-name { font-size: 11px; color: var(--soft); max-width: 58px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #fl-canvas .edge.muted { stroke-dasharray: 2 6; opacity: .45; }
+
+/* navegador de plugins (estilo FX Browser) */
+.pb-back { position: fixed; inset: 0; background: rgba(5, 8, 20, .55); display: grid; place-items: center; z-index: 50; }
+.pb-back[hidden] { display: none; }
+.pb { width: min(980px, 94vw); height: min(640px, 88vh); background: var(--night); border: 1px solid var(--line); border-radius: 14px;
+  display: grid; grid-template-rows: auto 1fr auto auto; box-shadow: 0 20px 60px rgba(0,0,0,.4); overflow: hidden; }
+.pb-head { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border-bottom: 1px solid var(--line); }
+.pb-head h2 { margin: 0; white-space: nowrap; }
+.pb-head input { flex: 1; }
+.pb-body { display: grid; grid-template-columns: 220px 1fr; min-height: 0; }
+.pb-tree { border-right: 1px solid var(--line); overflow: auto; padding: 8px; background: var(--surface); }
+.pb-tree h4 { font: 600 11px var(--body); color: var(--soft); text-transform: uppercase; letter-spacing: .06em; margin: 12px 6px 4px; }
+.pb-tree button { display: flex; justify-content: space-between; gap: 8px; width: 100%; text-align: left; padding: 5px 8px; border-radius: 7px;
+  border: 0; background: none; cursor: pointer; font-size: 13px; color: var(--ink); }
+.pb-tree button:hover { background: var(--night); }
+.pb-tree button.on { background: var(--amber); color: var(--amber-ink); font-weight: 600; }
+.pb-tree button small { color: inherit; opacity: .6; font-variant-numeric: tabular-nums; }
+.pb-list { overflow: auto; }
+.pb-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.pb-table th { position: sticky; top: 0; background: var(--night); text-align: left; font-weight: 600; color: var(--soft); padding: 8px; border-bottom: 1px solid var(--line); cursor: pointer; user-select: none; }
+.pb-table th.sorted::after { content: " ▾"; }
+.pb-table th.sorted.asc::after { content: " ▴"; }
+.pb-table td { padding: 6px 8px; border-bottom: 1px solid color-mix(in srgb, var(--line) 50%, transparent); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 320px; }
+.pb-table tbody tr { cursor: default; }
+.pb-table tbody tr:hover { background: var(--surface); }
+.pb-table tbody tr.sel { background: color-mix(in srgb, var(--amber) 25%, transparent); }
+.pb-table tbody tr.off { opacity: .45; }
+.pb-star { width: 28px; }
+.pb-table .star { border: 0; background: none; cursor: pointer; font-size: 15px; color: var(--line); padding: 0; }
+.pb-table .star.on { color: var(--amber); }
+.pb-fmt { font: 600 11px var(--display); padding: 1px 6px; border-radius: 5px; background: var(--surface); }
+.pb-foot { display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-top: 1px solid var(--line); }
+.pb-path { flex: 1; color: var(--soft); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pb-dirform { display: flex; gap: 8px; padding: 0 14px 12px; }
+.pb-dirform[hidden] { display: none; }
+.pb-dirform input { flex: 1; }
+.pb-empty { padding: 30px; color: var(--soft); text-align: center; }

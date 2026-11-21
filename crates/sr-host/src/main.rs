@@ -403,6 +403,40 @@ fn run() {
     }
 }
 
+/// Tipo do plugin em português, pela categoria declarada e, se não houver, pelo nome.
+fn categorize(raw: &str, name: &str) -> String {
+    let t = format!("{raw} {name}").to_lowercase();
+    let has = |ws: &[&str]| ws.iter().any(|w| t.contains(w));
+    if has(&["instrument", "synth", "instrumento"]) {
+        "Instrumento"
+    } else if has(&["reverb", "room", "verb", "hall", "plate"]) {
+        "Reverb"
+    } else if has(&["delay", "echo", "eco"]) {
+        "Delay"
+    } else if has(&["eq", "equaliz", "filter", "filtro", "fir"]) {
+        "EQ e filtros"
+    } else if has(&["dynamics", "comp", "limit", "gate", "expander", "dinâmica"]) {
+        "Dinâmica"
+    } else if has(&["distort", "satur", "drive", "amp", "fuzz"]) {
+        "Distorção"
+    } else if has(&["modulation", "chorus", "flang", "phaser", "trem"]) {
+        "Modulação"
+    } else if has(&["spatial", "surround", "stereo", "espacial", "pan"]) {
+        "Espacial"
+    } else if has(&["analy", "meter", "scope", "análise"]) {
+        "Análise"
+    } else if has(&["pitch", "tune"]) {
+        "Afinação"
+    } else if has(&["restor", "noise", "denois", "restauração"]) {
+        "Restauração"
+    } else if !raw.trim().is_empty() && raw != "Fx" && raw != "Audio Module Class" {
+        raw.trim()
+    } else {
+        "Outros"
+    }
+    .to_string()
+}
+
 /// Lista plugins VST3 e VST2 (64 e 32 bits) nas pastas padrão e nas `extra` (JSON para o app).
 fn scan(extra: &[String]) {
     let mut out: Vec<serde_json::Value> = vec![];
@@ -413,7 +447,12 @@ fn scan(extra: &[String]) {
     }
     dirs3.extend(extra.iter().map(PathBuf::from));
     for p in vst3_host::discovery::scan_directories(&dirs3).unwrap_or_default() {
-        out.push(serde_json::json!({ "path": p, "name": p.file_stem().map(|s| s.to_string_lossy().to_string()), "format": "VST3", "bits": 64, "supported": true }));
+        let info = vst3_host::discovery::get_plugin_info(&p).ok();
+        let name = info.as_ref().map(|i| i.name.clone()).filter(|n| !n.is_empty()).or_else(|| p.file_stem().map(|s| s.to_string_lossy().to_string()));
+        let vendor = info.as_ref().map(|i| i.vendor.clone()).unwrap_or_default();
+        let raw = info.as_ref().map(|i| i.category.clone()).unwrap_or_default();
+        out.push(serde_json::json!({ "path": p, "name": name, "format": "VST3", "bits": 64, "supported": true,
+            "vendor": vendor, "category": categorize(&raw, name.as_deref().unwrap_or("")) }));
     }
     // VST2: pastas comuns + a registrada pelos instaladores + as extras
     let mut dirs2: Vec<PathBuf> = [
@@ -459,9 +498,21 @@ fn scan(extra: &[String]) {
         }
         let name = p.file_stem().map(|s| s.to_string_lossy().to_string());
         match vst2::pe_bits(&p) {
-            Some(64) if vst2::is_vst2(&p) => out.push(serde_json::json!({ "path": p, "name": name, "format": "VST2", "bits": 64, "supported": true })),
+            Some(64) => {
+                if let Some((n, vendor, cat)) = vst2::probe(&p) {
+                    let nm = if n.is_empty() { name.clone().unwrap_or_default() } else { n };
+                    out.push(serde_json::json!({ "path": p, "name": nm, "format": "VST2", "bits": 64, "supported": true,
+                        "vendor": vendor, "category": categorize(&cat, &nm) }));
+                }
+            }
             // 32 bits não pode ser carregado aqui; o nome no arquivo basta para avisar
-            Some(32) => out.push(serde_json::json!({ "path": p, "name": name, "format": "VST2", "bits": 32, "supported": false })),
+            Some(32) => {
+                let nm = name.clone().unwrap_or_default();
+                // fabricante pela pasta (ex.: VSTPlugins\ReaPlugs) — não dá para abrir 32 bits aqui
+                let vendor = p.parent().and_then(|d| d.file_name()).map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+                out.push(serde_json::json!({ "path": p, "name": nm, "format": "VST2", "bits": 32, "supported": false,
+                    "vendor": vendor, "category": categorize("", &nm) }));
+            }
             _ => {}
         }
     }

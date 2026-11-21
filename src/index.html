@@ -154,9 +154,7 @@
         <p class="note" id="pl-engine"></p>
         <ol class="chain" id="pl-chain"></ol>
         <div class="addrule">
-          <select id="pl-found" aria-label="Plugins instalados"></select>
-          <button class="pill solid" id="pl-add">Adicionar plugin</button>
-          <button class="pill" id="pl-rescan">Procurar de novo</button>
+          <button class="pill solid" id="pl-add">Adicionar plugin…</button>
         </div>
         <div class="addrule" style="margin-top:8px">
           <input id="pl-path" placeholder="Ou cole o caminho de um plugin (.vst3 ou .dll) ou de uma pasta de plugins" aria-label="Caminho do plugin">
@@ -269,7 +267,37 @@
     <p id="error" class="error" hidden></p>
   </div>
 </div>
+<!-- NAVEGADOR DE PLUGINS (estilo FX Browser) -->
+<div class="pb-back" id="pb" hidden>
+  <div class="pb" role="dialog" aria-modal="true" aria-labelledby="pb-title">
+    <div class="pb-head">
+      <h2 id="pb-title">Adicionar plugin</h2>
+      <input type="text" id="pb-search" placeholder="Filtrar (nome, fabricante, tipo)" aria-label="Filtrar plugins">
+      <button class="icon" id="pb-close" title="Fechar (Esc)">×</button>
+    </div>
+    <div class="pb-body">
+      <nav class="pb-tree" id="pb-tree" aria-label="Filtros"></nav>
+      <div class="pb-list">
+        <table class="pb-table">
+          <thead><tr><th class="pb-star"></th><th data-sort="name">Nome</th><th data-sort="format">Formato</th><th data-sort="vendor">Fabricante</th><th data-sort="category">Tipo</th></tr></thead>
+          <tbody id="pb-rows"></tbody>
+        </table>
+      </div>
+    </div>
+    <div class="pb-foot">
+      <span class="pb-path" id="pb-path"></span>
+      <button class="pill" id="pb-dir">Adicionar pasta…</button>
+      <button class="pill" id="pb-rescan">Procurar de novo</button>
+      <button class="pill solid" id="pb-add" disabled>Adicionar</button>
+    </div>
+    <div class="pb-dirform" id="pb-dirform" hidden>
+      <input type="text" id="pb-dirpath" placeholder="C:\Program Files\VSTPlugins\MinhaPasta" aria-label="Pasta de plugins">
+      <button class="pill solid" id="pb-dirok">Procurar nesta pasta</button>
+    </div>
+  </div>
+</div>
 <script src="main.js"></script>
 <script src="flow.js"></script>
+<script src="browser.js"></script>
 </body>
 </html>

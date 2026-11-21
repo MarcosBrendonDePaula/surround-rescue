@@ -375,11 +375,9 @@ const plAddDir = (d) => { const l = plDirs(); if (!l.includes(d)) { l.push(d); t
 const plLabel = (f) => `${f.name || baseName(f.path)} · ${f.format || "VST3"}${f.bits === 32 ? " 32 bits (ainda não suportado)" : ""}`;
 
 async function plScan() {
-  $("#pl-found").innerHTML = `<option>Procurando plugins…</option>`;
+
   try { PL.found = await invoke("scan_plugins", { extra: plDirs() }); } catch (e) { PL.found = []; $("#error").textContent = String(e); $("#error").hidden = false; }
-  $("#pl-found").innerHTML = PL.found.length
-    ? PL.found.map((f, i) => `<option value="${i}"${f.supported === false ? " disabled" : ""}>${esc(plLabel(f))}</option>`).join("")
-    : `<option value="">Nenhum plugin encontrado nas pastas padrão</option>`;
+
 }
 
 /// Lista só edita a estrutura quando o fluxo é uma fila simples (aí o desenho vira fila de novo).
@@ -431,14 +429,12 @@ async function plSave() {
 
 function plBind() {
   $("#pl-device").addEventListener("change", (e) => { PL.device = e.target.value; plLoadChain(); });
-  $("#pl-rescan").addEventListener("click", plScan);
-  $("#pl-add").addEventListener("click", () => {
-    const f = PL.found[Number($("#pl-found").value)];
+  $("#pl-add").addEventListener("click", () => openPluginBrowser((f) => {
     if (!f) return;
     if (!plListEdit()) return;
     PL.chain.plugins.push({ path: f.path, enabled: true });
     plSave();
-  });
+  }));
   $("#pl-add-path").addEventListener("click", () => {
     const p = $("#pl-path").value.trim().replace(/^"|"$/g, "");
     if (!p) return;

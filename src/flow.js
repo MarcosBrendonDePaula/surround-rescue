@@ -384,7 +384,12 @@ function catalogItems() {
       ...outs.map((d) => ({ k: "app", ic: "👂", t: `Ouvir: ${d.name}`, d: "Tudo o que toca nesta saída", node: { kind: "listen", device: d.id } })),
     ]],
     ["Efeitos nativos", Object.entries(FX).map(([id, f]) => ({ k: "fx", ic: f.glyph, t: f.name, d: f.desc, node: { kind: "fx", fx: id, value: f.def ?? 0 } }))],
-    ["Plugins VST", FL.scanning && !PL.found.length
+    ["Plugins", [
+      { k: "plugin", ic: "⌕", t: "Abrir navegador de plugins…", d: "Todos os VST3, VST2 e CLAP, com busca e filtros", browser: true },
+      ...PL.found.filter((f) => f.supported !== false && pbFavs().includes(pbKey(f)))
+        .map((f) => ({ k: "plugin", ic: "★", t: f.name || baseName(f.path), d: `favorito · ${f.format || "VST3"}`, plugin: f.path })),
+    ]],
+    ["Plugins (todos)", FL.scanning && !PL.found.length
       ? [{ k: "plugin", ic: "…", t: "Procurando plugins…", d: "só na primeira vez", node: null }]
       : PL.found.map((f) => f.supported === false
         ? { k: "plugin", ic: "✦", t: f.name || baseName(f.path), d: `${f.format} 32 bits — ainda não suportado`, node: null }
@@ -413,6 +418,12 @@ function flCatalog() {
 
 /// Cria a caixa escolhida no catálogo, já ligada quando veio de um "+".
 function flCreate(it) {
+  if (it?.browser) {
+    // abre o navegador mantendo de onde o catálogo veio (+ de uma caixa, meio de uma seta)
+    const pending = FL.pending;
+    $("#fl-creator").hidden = true;
+    return openPluginBrowser((p) => { FL.pending = pending; flCreate({ plugin: p.path }); });
+  }
   if (!it || (!it.node && !it.plugin)) return;
   const g = graph();
   let node;
