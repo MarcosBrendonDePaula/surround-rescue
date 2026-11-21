@@ -1,0 +1,8 @@
+[package]
+name = "sr-bridge"
+version = "0.1.0"
+edition = "2021"
+description = "Ponte universal entre dispositivos: taxa, canais e relógio diferentes no mesmo fluxo"
+
+[dependencies]
+rubato = "0.16"
