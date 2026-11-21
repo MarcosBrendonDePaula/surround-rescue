@@ -129,6 +129,41 @@ pub fn body(app_version: &str, own_engine: bool, host_running: bool, lines: usiz
         count("Capture", &|d| d.connected),
         count("Capture", &|d| d.connected && d.engine)
     ));
+    // por dispositivo conectado: o que costuma impedir o efeito de agir
+    let eng_dir = data().join("engine");
+    let sysfx_off = |flow: &str, id: &str| -> bool {
+        use winreg::enums::HKEY_LOCAL_MACHINE;
+        let p = format!(r"SOFTWARE\Microsoft\Windows\CurrentVersion\MMDevices\Audio\{flow}\{id}\FxProperties");
+        winreg::RegKey::predef(HKEY_LOCAL_MACHINE)
+            .open_subkey(p)
+            .and_then(|k| k.get_value::<u32, _>("{1da5d803-d492-4edd-8c23-e0c0ffee7f0e},5"))
+            .map(|v| v != 0)
+            .unwrap_or(false)
+    };
+    let chosen_out = crate::system::pick(&crate::devices::list("Render"), None).map(|d| d.id);
+    let chosen_in = crate::system::pick(&crate::devices::list("Capture"), None).map(|d| d.id);
+    b.push_str(&format!("\n| {} | {} | {} | {} | {} | {} | {} |\n|---|---|---|---|---|---|---|\n",
+        tr(en, "Dispositivo (hardware)", "Device (hardware)"), tr(en, "Tipo", "Type"), tr(en, "Motor próprio", "Built-in engine"),
+        "Equalizer APO", tr(en, "Melhorias do Windows", "Windows enhancements"), tr(en, "Motor carregado", "Engine loaded"), tr(en, "Recebe ajustes", "Gets settings")));
+    for flow in ["Render", "Capture"] {
+        for d in crate::devices::list(flow).iter().filter(|d| d.connected) {
+            let id = d.id.to_lowercase();
+            let st = std::fs::read_to_string(eng_dir.join(format!("status-{id}.txt"))).unwrap_or_default();
+            let age = std::fs::metadata(eng_dir.join(format!("status-{id}.txt"))).and_then(|m| m.modified()).ok()
+                .and_then(|t| t.elapsed().ok()).map(|e| format!(" ({} min)", e.as_secs() / 60)).unwrap_or_default();
+            let loaded = if st.trim().is_empty() { tr(en, "não", "no").to_string() } else { format!("{}{age}", st.trim()) };
+            let gets = eng_dir.join(format!("{id}.json")).exists();
+            let is_chosen = Some(&d.id) == if flow == "Render" { chosen_out.as_ref() } else { chosen_in.as_ref() };
+            let yn = |v: bool| if v { tr(en, "sim", "yes") } else { tr(en, "não", "no") };
+            b.push_str(&format!("| {}{} | {} | {} | {} | {} | {} | {} |\n",
+                d.device, if is_chosen { tr(en, " ⟵ escolhido", " ⟵ chosen") } else { "" },
+                if flow == "Render" { tr(en, "saída", "output") } else { tr(en, "entrada", "input") },
+                yn(crate::engine::installed_on(flow, &d.id)), yn(d.apo),
+                if sysfx_off(flow, &d.id) { tr(en, "**desligadas**", "**off**") } else { tr(en, "ligadas", "on") },
+                loaded, yn(gets)));
+        }
+    }
+    b.push('\n');
     let host = if host_running { tr(en, "rodando", "running") } else { tr(en, "parado", "stopped") };
     b.push_str(&format!("- {}: {host}\n", tr(en, "Executor do Fluxo", "Flow host")));
     if !install_err.trim().is_empty() {
