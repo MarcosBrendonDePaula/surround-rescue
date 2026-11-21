@@ -84,7 +84,6 @@ pub struct Processor {
     test: i32,
     test_n: u64,
     test_seed: u32,
-    test_lp: f64,
     // corda dedilhada (Karplus-Strong) do som de teste
     ks: Vec<f64>,
     ks_len: usize,
@@ -112,7 +111,6 @@ impl Processor {
             test: -1,
             test_n: 0,
             test_seed: 1,
-            test_lp: 0.0,
             ks: vec![0.0; (sr / 60.0) as usize + 2],
             ks_len: 2,
             ks_pos: 0,
@@ -144,7 +142,11 @@ impl Processor {
         let boost = s.bass_db().max(s.presence_db()).max(s.voice_db()).max(eq_max).max(0.0);
         // folga antes dos filtros: 3 dB fixos (como a Razer) + metade do maior reforço; o resto dos picos
         // fica com o limitador. Antes era o reforço inteiro: aumentar o graves abaixava todo o resto.
-        let headroom = 3.0 + 0.5 * boost + 0.0 + 20.0 * s.width().log10();
+        // folga = 3 dB fixos (como a Razer) + o reforço inteiro: música gravada alta já chega perto do
+        // máximo, e reforçar sem abrir espaço joga tudo no limitador, que abaixa a música inteira a cada
+        // batida ("bombeia") e o reforço some. Com a folga, o reforço aparece de verdade.
+        // (o estéreo melhorado não entra: ele só abre os lados, o meio, onde ficam graves e voz, fica igual)
+        let headroom = 3.0 + boost;
         self.pre.target = db_to_lin(s.volume_db - headroom);
         self.width.target = s.width();
         self.vmix.target = if s.spatial > 0.0 { 1.0 } else { 0.0 };
@@ -533,8 +535,9 @@ mod tests {
             rms_db(&l[24000..])
         };
         let diff = measure(&mut eq) - measure(&mut base);
-        // +6 dB na banda, descontada a folga extra (metade do reforço = 3 dB): sobra +3 dB
-        assert!((diff - 3.0).abs() < 0.5, "diferença {diff}");
+        // +6 dB na banda, descontada a folga do reforço (o reforço inteiro): a banda fica no nível
+        // original e o resto desce 6 dB (é isso que evita o limitador "bombear")
+        assert!(diff.abs() < 0.5, "diferença {diff}");
         let mut s2 = s.clone();
         s2.eq[5] = 0.0;
         s2.eq[9] = 6.0; // reserva igual, mas sem reforço em 1 kHz

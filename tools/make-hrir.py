@@ -7,7 +7,8 @@ Autores: Bill Gardner e Keith Martin.
 
 Uso: python tools/make-hrir.py <pasta elev0 do compact.zip>
 Passos: reamostra 44,1 -> 48 kHz; equalização de campo difuso (média de todas as direções,
-suavizada em 1/3 de oitava, limitada a +-12 dB, fase mínima); corta em 192 amostras com fade.
+suavizada em 1/3 de oitava, limitada a +-12 dB, fase mínima); timbre neutro por direção (soma dos
+dois ouvidos plana); corta em 192 amostras com fade.
 """
 import sys, wave
 import numpy as np
@@ -41,7 +42,31 @@ def main(d):
     c[1:F // 2] *= 2
     c[F // 2 + 1:] = 0
     eq = np.fft.ifft(np.exp(np.fft.fft(c))).real[:256]
-    out = np.stack([[np.convolve(H[a, :, e], eq)[:N] for e in range(2)] for a in range(37)])
+    out = np.stack([[np.convolve(H[a, :, e], eq)[:N + 64] for e in range(2)] for a in range(37)])
+
+    # timbre neutro em cada direção: a soma de potência dos dois ouvidos fica plana (suavizada em
+    # 1/3 de oitava). Mantém as diferenças entre os ouvidos (o que dá a direção) e tira a "cor" da
+    # orelha do boneco, que somada em música estéreo deixava graves-médios inchados e agudos brilhantes.
+    for az in range(37):
+        X = np.fft.rfft(out[az], F, axis=1)
+        pw = (np.abs(X) ** 2).mean(axis=0)
+        sm2 = np.empty_like(pw)
+        for i, fi in enumerate(f):
+            m = (f >= fi / 2 ** (1 / 6)) & (f <= fi * 2 ** (1 / 6))
+            sm2[i] = pw[m].mean() if m.any() else pw[i]
+        g = 1 / np.sqrt(sm2)
+        g /= g[np.argmin(abs(f - 1000))]
+        g = np.clip(g, 10 ** (-10 / 20), 10 ** (10 / 20))
+        g[f > 16000] = g[np.argmin(abs(f - 16000))]
+        g[f < 150] = g[np.argmin(abs(f - 150))]
+        Lg = np.log(np.concatenate([g, g[-2:0:-1]]))
+        cg = np.fft.ifft(Lg).real
+        cg[1:F // 2] *= 2
+        cg[F // 2 + 1:] = 0
+        corr = np.fft.ifft(np.exp(np.fft.fft(cg))).real[:128]
+        for e in range(2):
+            out[az, e, :] = np.convolve(out[az, e], corr)[:out.shape[2]]
+    out = out[:, :, :N]
     fade = np.ones(N)
     fade[-32:] = np.cos(np.linspace(0, np.pi / 2, 32)) ** 2
     out *= fade
@@ -53,7 +78,7 @@ def main(d):
         fo.write("//! conjunto \"compact\", elevação 0°. \"Copyright 1994 by the MIT Media Laboratory. It is provided free\n")
         fo.write("//! with no restrictions on use, provided the authors are cited when the data is used in any research\n")
         fo.write("//! or commercial application.\" https://sound.media.mit.edu/resources/KEMAR.html\n//!\n")
-        fo.write("//! Gerado por tools/make-hrir.py: reamostrado para 48 kHz, equalizado para campo difuso (fase mínima).\n\n")
+        fo.write("//! Gerado por tools/make-hrir.py: reamostrado para 48 kHz, equalizado para campo difuso e com timbre\n//! neutro por direção (soma dos dois ouvidos plana), filtros de fase mínima.\n\n")
         fo.write(f"pub const RATE: f64 = 48000.0;\npub const LEN: usize = {N};\npub const STEP_DEG: f64 = 5.0;\n")
         fo.write("pub static HRIR: [[[f32; LEN]; 2]; 37] = [\n")
         for a in range(37):
