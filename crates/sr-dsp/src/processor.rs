@@ -1,7 +1,7 @@
 //! Cadeia de processamento.
 //!
 //! Fone (estéreo):
-//!   ganho de entrada → estéreo melhorado (mid/side) → caixas virtuais (crossfeed com ITD)
+//!   ganho de entrada → estéreo melhorado (mid/side) → surround 7.1 virtual (ver surround.rs)
 //!   → graves → clareza de voz → equalizador 10 bandas → normalização (compressor)
 //!   → volume → limitador -1 dBFS (sempre ligado: nunca estoura)
 //!
@@ -10,6 +10,7 @@
 
 use crate::biquad::{Biquad, Coefs, Kind};
 use crate::dynamics::{Compressor, Limiter};
+use crate::surround::Virtualizer;
 use crate::{MicSettings, Settings, EQ_FREQS};
 
 const DELAY_LEN: usize = 1024; // > 0,65 ms a 384 kHz
@@ -43,11 +44,8 @@ pub struct Processor {
     enabled: bool,
     pre: Smoothed,
     width: Smoothed,
-    cross: Smoothed,
-    cross_lp: [Biquad; 2],
-    delay: [[f64; DELAY_LEN]; 2],
-    pos: usize,
-    delay_samples: f64,
+    vmix: Smoothed,
+    virt: Virtualizer,
     filters: [[Biquad; 13]; 2],
     n_filters: usize,
     comp: Compressor,
@@ -63,11 +61,8 @@ impl Processor {
             enabled: false,
             pre: Smoothed::new(1.0, sr),
             width: Smoothed::new(1.0, sr),
-            cross: Smoothed::new(0.0, sr),
-            cross_lp: [Biquad::default(); 2],
-            delay: [[0.0; DELAY_LEN]; 2],
-            pos: 0,
-            delay_samples: 0.0,
+            vmix: Smoothed::new(0.0, sr),
+            virt: Virtualizer::new(sr),
             filters: [[Biquad::default(); 13]; 2],
             n_filters: 0,
             comp: Compressor::new(sr),
@@ -95,13 +90,13 @@ impl Processor {
         let boost = s.bass_db().max(s.presence_db()).max(s.voice_db()).max(eq_max).max(0.0);
         // folga antes dos filtros: 3 dB fixos (como a Razer) + metade do maior reforço; o resto dos picos
         // fica com o limitador. Antes era o reforço inteiro: aumentar o graves abaixava todo o resto.
-        let headroom = 3.0 + 0.5 * boost + 20.0 * (1.0 + s.cross_gain()).log10() + 20.0 * s.width().log10();
+        let headroom = 3.0 + 0.5 * boost + if s.spatial > 0.0 { 1.5 } else { 0.0 } + 20.0 * s.width().log10();
         self.pre.target = db_to_lin(s.volume_db - headroom);
         self.width.target = s.width();
-        self.cross.target = s.cross_gain();
-        self.delay_samples = (s.cross_delay_ms() * 0.001 * self.sr).min((DELAY_LEN - 2) as f64);
-        let lp = Coefs::new(Kind::LowPass, self.sr, 700.0, 0.0, 0.707);
-        self.cross_lp.iter_mut().for_each(|b| b.set(lp));
+        self.vmix.target = if s.spatial > 0.0 { 1.0 } else { 0.0 };
+        self.virt.set(s.front_angle);
+        // 0..100: 50 = ambiente padrão; 100 = o dobro
+        self.virt.amb_gain = s.spatial / 50.0;
 
         let mut list: [Option<Coefs>; 13] = [None; 13];
         let mut n = 0;
@@ -143,19 +138,14 @@ impl Processor {
         self.comp.set_level(s.normalization_level);
     }
 
-    #[inline]
-    fn read_delay(&self, ch: usize) -> f64 {
-        let d = self.delay_samples;
-        let i = d.floor() as usize;
-        let frac = d - i as f64;
-        let a = self.delay[ch][(self.pos + DELAY_LEN - i) % DELAY_LEN];
-        let b = self.delay[ch][(self.pos + DELAY_LEN - i - 1) % DELAY_LEN];
-        a + (b - a) * frac
-    }
-
     /// Processa um par de amostras.
     #[inline]
     pub fn process_frame(&mut self, l: f32, r: f32) -> (f32, f32) {
+        self.frame(l, r, None)
+    }
+
+    #[inline]
+    fn frame(&mut self, l: f32, r: f32, multi: Option<&[f32]>) -> (f32, f32) {
         if !self.enabled {
             return (l, r);
         }
@@ -168,14 +158,30 @@ impl Processor {
         l = m + w * s;
         r = m - w * s;
 
-        // caixas virtuais: cada ouvido ouve a caixa oposta, mais tarde e abafada
-        let c = self.cross.next();
-        self.delay[0][self.pos] = self.cross_lp[0].process(r); // chega ao ouvido esquerdo
-        self.delay[1][self.pos] = self.cross_lp[1].process(l); // chega ao ouvido direito
-        let (xl, xr) = (self.read_delay(0), self.read_delay(1));
-        self.pos = (self.pos + 1) % DELAY_LEN;
-        l += c * xl;
-        r += c * xr;
+        // surround 7.1 virtual (liga/desliga com transição suave)
+        let k = self.vmix.next();
+        if k > 1e-4 {
+            let (vl, vr) = match multi {
+                Some(f) => {
+                    let mut buf = [0.0f32; 8];
+                    for (i, x) in f.iter().take(8).enumerate() {
+                        buf[i] = (*x as f64 * g) as f32;
+                    }
+                    buf[0] = l as f32;
+                    buf[1] = r as f32;
+                    self.virt.multi(&buf[..f.len().min(8)])
+                }
+                None => self.virt.stereo(l, r),
+            };
+            l = (1.0 - k) * l + k * vl;
+            r = (1.0 - k) * r + k * vr;
+        } else if let Some(f) = multi {
+            // sem virtualização: desce os outros canais para o estéreo
+            let gg = |i: usize| f.get(i).copied().unwrap_or(0.0) as f64 * g * 0.5;
+            let c = gg(2) + gg(3);
+            l += c + gg(4) + gg(6);
+            r += c + gg(5) + gg(7);
+        }
 
         for f in &mut self.filters[0][..self.n_filters] {
             l = f.process(l);
@@ -202,8 +208,22 @@ impl Processor {
         if channels < 2 {
             return;
         }
+        if channels == 2 {
+            for frame in buf.chunks_exact_mut(2) {
+                (frame[0], frame[1]) = self.process_frame(frame[0], frame[1]);
+            }
+            return;
+        }
+        // 5.1/7.1: todas as caixas viram os dois ouvidos; os outros canais ficam em silêncio
+        let enabled = self.enabled;
         for frame in buf.chunks_exact_mut(channels) {
-            (frame[0], frame[1]) = self.process_frame(frame[0], frame[1]);
+            if !enabled {
+                continue;
+            }
+            let (l, r) = self.frame(frame[0], frame[1], Some(&*frame));
+            frame[0] = l;
+            frame[1] = r;
+            frame[2..].iter_mut().for_each(|x| *x = 0.0);
         }
     }
 }
@@ -392,10 +412,11 @@ mod tests {
         let mut r = vec![0.0f32; 200];
         l[0] = 0.5;
         p.process_stereo(&mut l, &mut r);
-        let first = r.iter().position(|v| v.abs() > 1e-6).unwrap();
-        // 0,65 ms a 48 kHz ≈ 31 amostras, depois da antecipação do limitador
-        let first = first - p.latency();
-        assert!((28..=34).contains(&first), "chegou na amostra {first}");
+        let fl = l.iter().position(|v| v.abs() > 1e-4).unwrap();
+        let fr = r.iter().position(|v| v.abs() > 1e-4).unwrap();
+        // caixa a 60° (máximo): o ouvido oposto ouve ~0,5 ms depois (≈ 24 amostras)
+        let itd = fr - fl;
+        assert!((18..=30).contains(&itd), "diferença {itd}");
     }
 
     #[test]
