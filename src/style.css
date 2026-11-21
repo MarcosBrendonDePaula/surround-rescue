@@ -425,3 +425,36 @@ pre { white-space: pre-wrap; font-size: 11.5px; color: var(--soft); background: 
 .strip-solo { width: 30px; height: 24px; border-radius: 6px; border: 1px solid var(--line); background: var(--surface); font: 700 11px var(--display); cursor: pointer; }
 .strip.soloed .strip-solo { background: var(--warn); color: #2a1a00; border-color: var(--warn); }
 .strip-peak { color: var(--ink); }
+
+/* ---------- mesa v2: canal de console ---------- */
+.mx { gap: 10px; padding: 12px 4px 8px; align-items: stretch; }
+.strip { min-width: 96px; width: 96px; padding: 12px 8px 10px; gap: 10px; border-radius: 14px;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--surface) 70%, var(--night)) 0%, var(--night) 100%);
+  border: 1px solid var(--line); }
+.strip:hover { border-color: color-mix(in srgb, var(--amber) 35%, var(--line)); }
+.strip.master { width: 112px; min-width: 112px; background: linear-gradient(180deg, color-mix(in srgb, var(--amber) 12%, var(--surface)) 0%, var(--night) 100%); }
+.strip-name { max-width: 84px; text-align: center; font: 600 12px var(--display); line-height: 1.2; height: 2.4em; overflow: hidden; white-space: normal; }
+.strip-pan { width: 100%; position: relative; }
+.strip-pan .pan { width: 76px; }
+.strip-pan::before { content: ""; position: absolute; left: 50%; top: 2px; width: 1px; height: 8px; background: var(--soft); opacity: .5; }
+.strip-body { position: relative; display: grid; grid-template-columns: 22px 26px 14px; gap: 4px; height: 220px; justify-content: center; }
+.strip.master .strip-body { grid-template-columns: 22px 26px; }
+.strip .fader { height: 220px; width: 26px; }
+.scale { position: relative; height: 100%; }
+.scale span { position: absolute; right: 0; transform: translateY(50%); font: 600 9px var(--display); color: var(--soft); font-variant-numeric: tabular-nums; }
+.meter { width: 14px; border-radius: 5px; background: var(--deep); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--line) 70%, transparent); }
+.meter.wide { width: 26px; }
+.meter i { position: absolute; left: 2px; right: 2px; bottom: 2px; height: 0; border-radius: 3px; transition: height 60ms linear; }
+.meter .pre { background: color-mix(in srgb, var(--ink) 18%, transparent); }
+.meter .post { background: linear-gradient(0deg, var(--ok) 0px, var(--ok) 150px, var(--warn) 185px, var(--bad) 212px); background-size: 100% 216px; background-position: bottom; }
+.meter b { left: 2px; right: 2px; height: 2px; border-radius: 1px; }
+.strip-db { font: 700 13px var(--display); }
+.strip-ms button { width: 34px; height: 26px; }
+
+/* nível ao vivo nas caixas do desenho */
+#fl-canvas .lvl-bg { fill: var(--deep); }
+#fl-canvas .lvl { fill: var(--ok); transition: width 90ms linear; }
+#fl-canvas .lvl.hot { fill: var(--bad); }
+/* pan: trilho neutro (não é volume), marca no centro */
+.strip-pan .pan::-webkit-slider-runnable-track { background: var(--line) !important; }
+.strip-pan .pan::-webkit-slider-thumb { width: 14px; height: 14px; }

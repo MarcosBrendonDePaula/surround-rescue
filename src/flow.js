@@ -252,6 +252,8 @@ function flRender() {
       <svg class="glyph" x="23" y="21" width="22" height="22" viewBox="0 0 24 24"><path d="${iconPath(glyph)}"/></svg>
       <text class="title" x="66" y="28">${esc(trunc(title, 20))}</text>
       <text class="sub" x="66" y="46">${esc(trunc(sub, 26))}</text>
+      <rect class="lvl-bg" x="66" y="${H - 9}" width="${W - 84}" height="3" rx="1.5"/>
+      <rect class="lvl" data-lvl="${esc(n.id)}" x="66" y="${H - 9}" width="0" height="3" rx="1.5"/>
       ${!["input", "app", "receive", "listen"].includes(n.kind) ? `<circle class="port in" data-port-in="${esc(n.id)}" cx="0" cy="${H / 2}" r="7"/>` : ""}
       ${n.kind !== "output" ? `<circle class="port out" data-port-out="${esc(n.id)}" cx="${W}" cy="${H / 2}" r="7"/>` : ""}
       ${n.kind !== "output" && !hasOut.has(n.id) ? `<g class="plus" data-plus="${esc(n.id)}"><line x1="${W + 7}" y1="${H / 2}" x2="${W + 34}" y2="${H / 2}"/><rect x="${W + 34}" y="${H / 2 - 13}" width="26" height="26" rx="7"/><text x="${W + 47}" y="${H / 2}">+</text></g>` : ""}
@@ -426,8 +428,9 @@ function mixStrip(g, e, i) {
     <span class="strip-name" title="${esc(name)}">${esc(trunc(name, 12))}</span>
     <div class="strip-pan"><input type="range" class="pan" min="-100" max="100" step="1" value="${Math.round(pan * 100)}" aria-label="Pan de ${esc(name)}"><output>${panText(pan)}</output></div>
     <div class="strip-body">
-      <div class="meter" aria-hidden="true"><i></i><b></b></div>
+      <div class="scale" aria-hidden="true">${[6, 0, -6, -12, -24, -48].map((d) => `<span style="bottom:${((d + 60) / 66) * 100}%">${d > 0 ? "+" + d : d}</span>`).join("")}</div>
       <input type="range" class="fader" min="-60" max="6" step="0.5" value="${toDb(e.gain)}" aria-label="Volume de ${esc(name)}">
+      <div class="meter" title="Claro: o que entra · Cor: depois do fader" aria-hidden="true"><i class="pre"></i><i class="post"></i><b></b></div>
     </div>
     <output class="strip-db">${dbText(e.gain)}</output>
     <div class="strip-ms"><button class="strip-mute" title="Mudo">M</button><button class="strip-solo" title="Solo (só as entradas em solo tocam)">S</button></div>
@@ -439,19 +442,21 @@ function masterStrip(n) {
     <span class="strip-ic">${iconHtml("out")}</span>
     <span class="strip-name">Master</span>
     <div class="strip-pan"></div>
-    <div class="strip-body"><div class="meter wide" aria-hidden="true"><i></i><b></b></div></div>
+    <div class="strip-body"><div class="scale" aria-hidden="true">${[6, 0, -6, -12, -24, -48].map((d) => `<span style="bottom:${((d + 60) / 66) * 100}%">${d > 0 ? "+" + d : d}</span>`).join("")}</div><div class="meter wide" aria-hidden="true"><i class="pre"></i><i class="post"></i><b></b></div></div>
     <output class="strip-db strip-peak">−∞</output>
     <div class="strip-ms"></div>
   </div>`;
 }
 /// Medidores: pede os níveis ao executor enquanto a mesa está aberta.
 const meterPct = (v) => Math.max(0, Math.min(100, ((20 * Math.log10(Math.max(v, 1e-6)) + 60) / 66) * 100));
-function meterSet(el, v) {
+/// `pre` = o que entra (antes do fader); `v` = o que passa (depois do fader).
+function meterSet(el, v, pre = v) {
   if (!el) return;
   const pct = meterPct(v);
   const hold = Math.max(pct, (Number(el.dataset.hold) || 0) - 1.2);
   el.dataset.hold = hold;
-  el.querySelector("i").style.height = `${pct}%`;
+  el.querySelector(".pre").style.height = `${meterPct(pre)}%`;
+  el.querySelector(".post").style.height = `${pct}%`;
   el.querySelector("b").style.bottom = `${hold}%`;
   el.classList.toggle("hot", v >= 0.89);
 }
@@ -465,8 +470,8 @@ function startMeters(box, g) {
     box.querySelectorAll(".strip[data-edge-i]").forEach((st) => {
       const e = g.edges[Number(st.dataset.edgeI)];
       if (!e) return;
-      const v = (lv[st.dataset.src] || 0) * (e.mute ? 0 : e.gain);
-      meterSet(st.querySelector(".meter"), v);
+      const pre = lv[st.dataset.src] || 0;
+      meterSet(st.querySelector(".meter"), pre * (e.mute ? 0 : e.gain), pre);
     });
     box.querySelectorAll(".strip[data-master]").forEach((st) => {
       const v = lv[st.dataset.master] || 0;
@@ -934,3 +939,17 @@ async function flDeleteFlow() {
 }
 
 flBind();
+
+// ---------- níveis ao vivo nas caixas ----------
+setInterval(async () => {
+  const tab = document.getElementById("tab-fluxo");
+  if (!tab || !tab.classList.contains("active") || document.hidden) return;
+  let lv;
+  try { const all = await invoke("get_levels"); lv = all[owner()] || all[String(owner()).toLowerCase()]; } catch (e) { return; }
+  const w = W - 84;
+  document.querySelectorAll("#fl-canvas .lvl").forEach((r) => {
+    const v = lv ? lv[r.dataset.lvl] || 0 : 0;
+    r.setAttribute("width", ((meterPct(v) / 100) * w).toFixed(1));
+    r.classList.toggle("hot", v >= 0.89);
+  });
+}, 100);
