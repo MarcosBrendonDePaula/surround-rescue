@@ -68,6 +68,9 @@ function render() {
     ? c.app_rules.map((r, i) => `<tr><td>${esc(r.exe)}</td><td>${esc(r.profile)}</td><td><button data-del="${i}" title="Remover">✕</button></td></tr>`).join("")
     : `<tr><td colspan="3" class="desc">Nenhum programa ainda.</td></tr>`;
 
+  document.body.classList.toggle("off", !s.enabled);
+  $(".power-text").textContent = s.enabled ? "Surround ligado" : "Surround desligado";
+  $$(".band input").forEach((el, i) => el.classList.toggle("neg", s.eq[i] < 0));
   drawStage(s);
   invoke("preview").then((t) => ($("#preview").textContent = t));
 }
@@ -76,26 +79,79 @@ function fmtDb(v) { return `${v > 0 ? "+" : ""}${v}`; }
 function esc(t) { return String(t).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]); }
 
 // ---------- palco (calibração) ----------
+const R = 112;
+const NAMES = { C: "Centro", FL: "Frente esq.", FR: "Frente dir.", SL: "Lateral esq.", SR: "Lateral dir.", RL: "Trás esq.", RR: "Trás dir." };
+const pos = (deg, r = R) => { const t = (deg * Math.PI) / 180; return [Math.sin(t) * r, -Math.cos(t) * r]; };
+
 function drawStage(s) {
-  const R = 95;
   const a = s.front_angle;
-  const spk = [
-    ["C", 0, false], ["FL", -a, true], ["FR", a, true], ["SL", -90, false], ["SR", 90, false], ["RL", -150, false], ["RR", 150, false],
-  ];
-  const on = s.enabled;
-  let svg = `<circle class="ring" r="${R}"/><circle class="ring2" r="${R + 12}"/><circle class="ring2" r="${R - 12}"/>`;
-  for (const [name, deg, active] of spk) {
-    const r = (deg * Math.PI) / 180;
-    const x = Math.sin(r) * R, y = -Math.cos(r) * R;
-    const lit = active && on;
-    if (lit) svg += `<line class="ray" x1="0" y1="0" x2="${x}" y2="${y}"/>`;
-    svg += `<rect class="spk${lit ? " on" : ""}" x="${x - 7}" y="${y - 7}" width="14" height="14" rx="2" transform="rotate(${deg} ${x} ${y})"/>`;
-    const lx = Math.sin(r) * (R + 24), ly = -Math.cos(r) * (R + 24) + 3;
-    svg += `<text class="lbl${lit ? " on" : ""}" x="${lx}" y="${ly}">${name}</text>`;
+  const spk = [["C", 0, false], ["FL", -a, true], ["FR", a, true], ["SL", -90, false], ["SR", 90, false], ["RL", -150, false], ["RR", 150, false]];
+  let svg = `<circle class="floor" r="${R + 30}"/>`;
+  svg += `<circle class="orbit" r="${R * 0.45}"/><circle class="orbit main" r="${R}"/>`;
+  for (let d = 0; d < 360; d += 15) {
+    const [x1, y1] = pos(d, R + 22), [x2, y2] = pos(d, R + (d % 45 ? 26 : 30));
+    svg += `<line class="tick" x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}"/>`;
   }
-  // manequim visto de cima
-  svg += `<ellipse cx="0" cy="6" rx="26" ry="12" fill="#333"/><circle cx="0" cy="0" r="13" fill="#555"/><path d="M-4 -12 L0 -18 L4 -12 Z" fill="${on ? "#44d62c" : "#777"}"/>`;
+  // feixe entre as duas caixas frontais (a "imagem" estéreo)
+  const [lx, ly] = pos(-a), [rx, ry] = pos(a);
+  svg += `<path class="beam" d="M0 0 L${lx} ${ly} A${R} ${R} 0 0 1 ${rx} ${ry} Z"/>`;
+  svg += `<g id="waves"></g>`;
+  for (const [id, deg, active] of spk) {
+    const [x, y] = pos(deg);
+    svg += `<g class="spkg" data-spk="${id}" transform="translate(${x} ${y}) rotate(${deg})">
+      <title>${NAMES[id]}${active ? " — arraste para ajustar" : " — disponível no 7.1"}</title>
+      <rect class="spk${active ? " on" : ""}" x="-11" y="-9" width="22" height="18" rx="5"/></g>`;
+    const [tx, ty] = pos(deg, R - 24);
+    svg += `<text class="lbl${active ? " on" : ""}" x="${tx}" y="${ty + 3}">${id}</text>`;
+  }
+  // cabeça vista de cima
+  svg += `<ellipse class="head" cx="0" cy="2" rx="17" ry="20"/><ellipse class="head" cx="-18" cy="2" rx="4" ry="7"/><ellipse class="head" cx="18" cy="2" rx="4" ry="7"/>`;
+  svg += `<path class="nose" d="M-5 -19 L0 -27 L5 -19 Z"/>`;
+  svg += `<text class="angle" x="0" y="${R * 0.45 + 18}">${Math.round(a * 2)}° de abertura</text>`;
   $("#stage").innerHTML = svg;
+}
+
+// arrastar as caixas frontais muda o ângulo
+function bindStageDrag() {
+  const stage = $("#stage");
+  let dragging = false;
+  const toAngle = (ev) => {
+    const pt = stage.createSVGPoint(); pt.x = ev.clientX; pt.y = ev.clientY;
+    const p = pt.matrixTransform(stage.getScreenCTM().inverse());
+    const deg = Math.abs((Math.atan2(p.x, -p.y) * 180) / Math.PI);
+    return Math.round(Math.min(90, Math.max(10, deg)));
+  };
+  stage.addEventListener("pointerdown", (ev) => {
+    const g = ev.target.closest("[data-spk]");
+    if (!g || !["FL", "FR"].includes(g.dataset.spk)) return;
+    dragging = true; stage.setPointerCapture(ev.pointerId);
+  });
+  stage.addEventListener("pointermove", (ev) => {
+    if (!dragging) return;
+    const v = toAngle(ev);
+    if (v !== cur().front_angle) { cur().front_angle = v; render(); saveSoon(); }
+  });
+  const end = () => { dragging = false; };
+  stage.addEventListener("pointerup", end);
+  stage.addEventListener("pointercancel", end);
+}
+
+// ondas saindo das caixas que estão tocando o teste
+function emitWaves(ids) {
+  if (matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+  const g = $("#waves"); if (!g) return;
+  const a = cur().front_angle;
+  const deg = { FL: -a, FR: a };
+  for (const id of ids) {
+    const [x, y] = pos(deg[id]);
+    for (let k = 0; k < 3; k++) {
+      const c = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+      c.setAttribute("class", "wave"); c.setAttribute("cx", x); c.setAttribute("cy", y); c.setAttribute("r", 12);
+      g.appendChild(c);
+      c.animate([{ r: 12, opacity: 0.9 }, { r: 70, opacity: 0 }], { duration: 900, delay: k * 260, easing: "ease-out", fill: "both" })
+        .onfinish = () => c.remove();
+    }
+  }
 }
 
 // ---------- salvar ----------
@@ -117,7 +173,7 @@ async function refreshStatus() {
   const items = [
     [s.apo_installed, "Equalizer APO instalado", "Equalizer APO não instalado", "bad"],
     [s.headphone.apo, "Fone do Kraken: efeito ativo", s.headphone.id ? "Fone do Kraken sem Equalizer APO (abra o Configurator)" : "Kraken não conectado", "bad"],
-    [s.mic.apo, "Microfone do Kraken: efeito ativo", s.mic.id ? "Microfone sem Equalizer APO (marque-o no Configurator para usar a aba MICROFONE)" : "Microfone do Kraken não encontrado", "warn"],
+    [s.mic.apo, "Microfone do Kraken: efeito ativo", s.mic.id ? "Microfone sem Equalizer APO (marque-o no Configurator para usar a aba Microfone)" : "Microfone do Kraken não encontrado", "warn"],
     [s.config_hooked, "Configuração conectada", "Configuração ainda não aplicada", "warn"],
     [!s.razer_service_running, "Razer Surround antigo desligado", "Razer Surround antigo ainda rodando: pode disputar o fone", "warn"],
   ];
@@ -171,8 +227,7 @@ function bind() {
 
   // equalizador
   $("#eq").innerHTML = EQ_FREQS.map((f, i) =>
-    `<div class="band"><output></output><input type="range" min="-12" max="12" step="0.5" data-band="${i}"><span>${f}</span></div>`).join("") +
-    `<div class="eqscale"><span>+12dB</span><span>+6dB</span><span>0dB</span><span>-6dB</span><span>-12dB</span></div>`;
+    `<div class="band"><output></output><input type="range" min="-12" max="12" step="0.5" data-band="${i}"><span>${f}</span></div>`).join("");
   $$(".band input").forEach((el) => el.addEventListener("input", () => {
     cur().eq[Number(el.dataset.band)] = Number(el.value);
     cur().eq_preset = "personalizado";
@@ -241,9 +296,10 @@ function bind() {
   });
 
   // testes
-  $("#test-left").addEventListener("click", () => testTone(-1));
-  $("#test-right").addEventListener("click", () => testTone(1));
-  $("#test-both").addEventListener("click", () => testTone(0));
+  $("#test-left").addEventListener("click", () => { testTone(-1); emitWaves(["FL"]); });
+  $("#test-right").addEventListener("click", () => { testTone(1); emitWaves(["FR"]); });
+  $("#test-both").addEventListener("click", () => { testTone(0); emitWaves(["FL", "FR"]); });
+  bindStageDrag();
 
   listen("snapshot", (e) => { snap = e.payload; render(); });
 }
