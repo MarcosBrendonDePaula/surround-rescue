@@ -81,3 +81,11 @@ A lógica de áudio (`eqapo.rs`) já está isolada do motor para permitir a troc
 - `sr-host/send.rs`: envio WASAPI compartilhado por eventos; nó `send` no grafo; recusa envio que volte ao dispositivo de origem.
 - Teste real (Realtek, 30 s em tempo real): 0 faltas durante o uso, correção convergindo +0,04% → +0,01%.
 - Falta: nó "Receber de dispositivo" (misturar microfones), medidores de nível.
+
+## Testes reais (2026-11-21, noite)
+- Fone do Kraken com o motor próprio (GFX) + fluxo de dispositivo com envio para outra saída: funcionando
+  (0 faltas, correção de relógio ~+0,07%). Nahimic do driver tirado do caminho (causa do som estourado).
+- Microfone de OUTRO fabricante (câmera Redragon, sem APOs de fábrica): motor no pré-mix (LFX) travou a 48 kHz,
+  voz passa; fluxo do microfone misturou um programa capturado → nível do mic subiu de 0,013 para 0,053 RMS.
+- Kraken mic: grava silêncio absoluto mesmo sem processamento (suspeita: mudo físico / haste recolhida).
+- Fluxos independentes com triggers e condição "só com o programa aberto": iniciam/param sozinhos.
