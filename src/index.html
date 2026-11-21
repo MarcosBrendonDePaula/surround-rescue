@@ -7,39 +7,48 @@
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
+<header class="titlebar" data-tauri-drag-region>
+  <div class="tb-brand" data-tauri-drag-region>
+    <svg viewBox="0 0 32 32" aria-hidden="true"><circle cx="16" cy="16" r="3.2"/><path d="M9.5 9.5a9.2 9.2 0 0 0 0 13M22.5 9.5a9.2 9.2 0 0 1 0 13M5.5 5.5a14.8 14.8 0 0 0 0 21M26.5 5.5a14.8 14.8 0 0 1 0 21"/></svg>
+    <span data-tauri-drag-region>Surround Rescue</span>
+  </div>
+  <div class="profilebar">
+    <span class="tb-label">Perfil</span>
+    <select id="profile" aria-label="Perfil"></select>
+    <button class="icon" id="p-new" title="Novo perfil (cópia do atual)">+</button>
+    <button class="icon" id="p-rename" title="Renomear perfil">✎</button>
+    <button class="icon" id="p-del" title="Excluir perfil">×</button>
+  </div>
+  <div class="tb-fill" data-tauri-drag-region></div>
+  <label class="power" title="Liga ou desliga todo o processamento do fone">
+    <input type="checkbox" data-s="enabled">
+    <span class="power-lamp"></span>
+    <span class="power-text"></span>
+  </label>
+  <div class="winctl">
+    <button id="win-min" title="Minimizar" aria-label="Minimizar"><svg viewBox="0 0 12 12"><path d="M2 6h8"/></svg></button>
+    <button id="win-max" title="Maximizar" aria-label="Maximizar"><svg viewBox="0 0 12 12"><rect x="2.5" y="2.5" width="7" height="7" rx="1"/></svg></button>
+    <button id="win-close" class="close" title="Fechar (continua perto do relógio)" aria-label="Fechar"><svg viewBox="0 0 12 12"><path d="M3 3l6 6M9 3l-6 6"/></svg></button>
+  </div>
+</header>
 <div class="shell">
   <aside class="rail">
-    <div class="logo" aria-hidden="true">
-      <svg viewBox="0 0 32 32"><circle cx="16" cy="16" r="3.2"/><path d="M9.5 9.5a9.2 9.2 0 0 0 0 13M22.5 9.5a9.2 9.2 0 0 1 0 13M5.5 5.5a14.8 14.8 0 0 0 0 21M26.5 5.5a14.8 14.8 0 0 1 0 21"/></svg>
-      <span>Surround<br>Rescue</span>
-    </div>
     <nav id="tabs">
-      <button data-tab="calibracao" class="active"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="2"/></svg>Calibração</button>
-      <button data-tab="audio"><svg viewBox="0 0 24 24"><path d="M4 9h4l5-4v14l-5-4H4z"/><path d="M16.5 8.5a5 5 0 0 1 0 7"/></svg>Áudio</button>
+      <button data-tab="calibracao" class="active"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="2"/></svg>Som</button>
       <button data-tab="equalizador"><svg viewBox="0 0 24 24"><path d="M6 4v16M12 4v16M18 4v16"/><circle cx="6" cy="14" r="2"/><circle cx="12" cy="8" r="2"/><circle cx="18" cy="16" r="2"/></svg>Equalizador</button>
       <button data-tab="microfone"><svg viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21"/></svg>Microfone</button>
       <button data-tab="plugins" hidden><svg viewBox="0 0 24 24"><path d="M9 3v5M15 3v5"/><rect x="5" y="8" width="14" height="6" rx="2"/><path d="M12 14v3a3 3 0 0 1-3 3"/></svg>Plugins</button>
       <button data-tab="fluxo"><svg viewBox="0 0 24 24"><rect x="2" y="4" width="7" height="6" rx="1.5"/><rect x="15" y="14" width="7" height="6" rx="1.5"/><path d="M9 7h3a3 3 0 0 1 3 3v4"/></svg>Fluxo</button>
       <button data-tab="perfis"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M7 10h6M7 14h10"/></svg>Perfis</button>
-      <button data-tab="configuracoes"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M5.6 18.4l2.1-2.1M16.3 7.7l2.1-2.1"/></svg>Configurações</button>
+      <button data-tab="configuracoes" class="tab-settings"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M5.6 18.4l2.1-2.1M16.3 7.7l2.1-2.1"/></svg>Configurações</button>
     </nav>
+    <div class="ver">
+      <span id="ver-text">Versão …</span>
+      <button class="ver-up" id="ver-up" hidden>Atualizar</button>
+    </div>
   </aside>
 
   <div class="main">
-    <header class="top">
-      <div class="profilebar">
-        <select id="profile" aria-label="Perfil"></select>
-        <button class="icon" id="p-new" title="Novo perfil (cópia do atual)">+</button>
-        <button class="icon" id="p-rename" title="Renomear perfil">✎</button>
-        <button class="icon" id="p-del" title="Excluir perfil">×</button>
-      </div>
-      <label class="power" title="Liga ou desliga todo o processamento do fone">
-        <input type="checkbox" data-s="enabled">
-        <span class="power-track"><span class="power-knob"></span></span>
-        <span class="power-text"></span>
-      </label>
-    </header>
-
     <main>
       <!-- CALIBRAÇÃO -->
       <section id="tab-calibracao" class="tab active">
@@ -48,7 +57,7 @@
           <p class="stage-hint">Clique numa caixa para ouvir o teste. Arraste até o som parecer vir de lá.</p>
         </div>
         <div class="stage-side">
-          <h1>Campo de som</h1>
+          <h2 class="sect">Campo de som</h2>
           <div class="field">
             <div class="flabel"><span>Caixas da frente</span><output data-o="front_angle"></output></div>
             <input type="range" data-s="front_angle" min="10" max="80" step="1">
@@ -66,19 +75,15 @@
             <input type="range" data-s="spatial" min="0" max="100" step="1">
           </div>
           <label class="toggle"><input type="checkbox" data-s="room"><span></span>Sala virtual</label>
-          <p class="note">Um eco curto, como o de um quarto, que faz o som parecer vir de fora da cabeça. Desligue se preferir o som mais seco e direto.</p>
+          <p class="note">Um eco curto, como o de um quarto, que tira o som de dentro da cabeça. Desligue para um som mais seco.</p>
           <div class="testers">
             <button class="pill" id="test-round">Dar a volta</button>
             <button class="pill" id="test-stop" hidden>Parar o teste</button>
           </div>
-          <p class="note">O teste toca pelo motor instalado no fone, com o mesmo processamento do som do Windows. Enquanto toca, o resto do som fica mudo.</p>
         </div>
-      </section>
-
-      <!-- ÁUDIO -->
-      <section id="tab-audio" class="tab">
-        <h1>Áudio</h1>
-        <div class="grid2">
+        <div class="tone">
+          <h2 class="sect">Tom</h2>
+          <div class="grid2">
           <div class="block">
             <label class="toggle"><input type="checkbox" data-s="stereo_enhanced"><span></span>Estéreo melhorado</label>
             <p class="desc">Abre o campo estéreo para o som parecer maior.</p>
@@ -93,7 +98,7 @@
           </div>
           <div class="block">
             <label class="toggle"><input type="checkbox" data-s="normalization_enabled"><span></span>Normalização de som</label>
-            <p class="desc">Segura sons súbitos e altos. Nesta versão reserva margem contra estouro; o compressor completo vem depois.</p>
+            <p class="desc">Aproxima sons baixos e altos: diálogo baixo sobe, explosão desce.</p>
             <div class="field" data-dep="normalization_enabled">
               <div class="flabel"><span>Quantidade</span><output data-o="normalization_level"></output></div>
               <input type="range" data-s="normalization_level" min="0" max="100" step="1">
@@ -116,6 +121,7 @@
           <div class="flabel"><span>Volume geral</span><output data-o="volume_db"></output></div>
           <input type="range" data-s="volume_db" min="-30" max="6" step="0.5">
           <p class="desc">Nunca estoura: o app desconta sozinho o reforço de graves e os efeitos.</p>
+        </div>
         </div>
       </section>
 

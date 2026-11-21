@@ -365,8 +365,18 @@ function bind() {
   listen("snapshot", (e) => { snap = e.payload; render(); });
 }
 
+// ---------- janela (barra própria) ----------
+function winBind() {
+  const w = window.__TAURI__.window.getCurrentWindow();
+  $("#win-min").addEventListener("click", () => w.minimize());
+  $("#win-max").addEventListener("click", () => w.toggleMaximize());
+  $("#win-close").addEventListener("click", () => w.close());
+  $(".titlebar").addEventListener("dblclick", (e) => { if (e.target.closest("[data-tauri-drag-region]") === e.target) w.toggleMaximize(); });
+}
+
 async function init() {
   snap = await invoke("get_snapshot");
+  try { winBind(); } catch (e) { console.warn(e); }
   bind();
   render();
   refreshStatus();
@@ -451,6 +461,9 @@ async function upCheck(quiet) {
   if (!quiet) $("#up-msg").textContent = "Procurando…";
   try { UP = await invoke("check_update"); } catch (e) { UP = { error: String(e) }; }
   const tab = document.querySelector('#tabs button[data-tab="configuracoes"]');
+  $("#ver-text").textContent = `Versão ${UP.current || "?"}`;
+  $("#ver-up").hidden = !UP.available;
+  if (UP.available) $("#ver-up").textContent = `Atualizar para ${UP.latest}`;
   if (UP.available) {
     $("#up-msg").textContent = `Versão ${UP.latest} disponível (instalada: ${UP.current}).`;
     $("#up-notes").textContent = UP.notes || "";
@@ -469,6 +482,7 @@ async function upCheck(quiet) {
 function upBind() {
   if (!$("#up-check")) return;
   $("#up-check").addEventListener("click", () => upCheck(false));
+  $("#ver-up").addEventListener("click", () => { $('#tabs button[data-tab="configuracoes"]').click(); $("#up-install").click(); });
   $("#up-install").addEventListener("click", async () => {
     if (!UP?.latest) return;
     $("#up-install").disabled = true;
