@@ -381,9 +381,24 @@ function winBind() {
   $(".titlebar").addEventListener("dblclick", (e) => { if (e.target.closest("[data-tauri-drag-region]") === e.target) w.toggleMaximize(); });
 }
 
+// ---------- motor desatualizado depois de atualizar o app ----------
+async function engineCheck() {
+  let items = [];
+  try { items = await invoke("engine_outdated"); } catch (e) { return; }
+  $("#engine-banner").hidden = !items.length;
+  if (!items.length) return;
+  $("#engine-update").onclick = async () => {
+    const b = $("#engine-update"); b.disabled = true; b.textContent = "Atualizando… aceite o pedido de administrador";
+    try { await invoke("set_engine", { on: true, items }); $("#engine-banner").hidden = true; }
+    catch (e) { $("#error").textContent = `Não deu certo: ${e}`; $("#error").hidden = false; }
+    b.disabled = false; b.textContent = "Atualizar o motor";
+  };
+}
+
 async function init() {
   snap = await invoke("get_snapshot");
   try { winBind(); } catch (e) { console.warn(e); }
+  engineCheck();
   bind();
   render();
   refreshStatus();

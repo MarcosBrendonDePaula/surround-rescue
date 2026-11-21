@@ -180,6 +180,24 @@ pub fn handle_cli(args: &[String]) -> Option<i32> {
     Some(if r.is_ok() { 0 } else { 1 })
 }
 
+/// Depois de uma atualização do app, o motor instalado no Windows ainda é o antigo (ele fica em
+/// Program Files\SurroundRescue\apo e só é trocado ao instalar de novo). Devolve os dispositivos que
+/// usam o motor quando a cópia instalada é diferente da que veio com o app.
+pub fn outdated() -> Vec<(String, String)> {
+    let Some(src) = dll_source() else { return vec![] };
+    let installed = PathBuf::from(DLL_DIR).join("sr_apo.dll");
+    let (Ok(a), Ok(b)) = (std::fs::read(&src), std::fs::read(&installed)) else { return vec![] };
+    if a == b {
+        return vec![];
+    }
+    ["Render", "Capture"]
+        .iter()
+        .flat_map(|f| crate::devices::list(f))
+        .filter(|d| installed_on(&d.flow, &d.id))
+        .map(|d| (d.flow, d.id))
+        .collect()
+}
+
 /// Estado do motor em todos os dispositivos (para a aba Configurações).
 #[derive(Serialize)]
 pub struct DevEngine {

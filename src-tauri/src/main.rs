@@ -213,6 +213,12 @@ async fn engine_devices() -> Result<Vec<engine::DevEngine>, String> {
 }
 
 /// Instala ou remove o motor próprio nos dispositivos (um pedido de administrador para todos).
+/// Dispositivos com o motor antigo (depois de atualizar o app). Vazio = tudo em dia.
+#[tauri::command]
+async fn engine_outdated() -> Result<Vec<(String, String)>, String> {
+    tauri::async_runtime::spawn_blocking(engine::outdated).await.map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 async fn set_engine(on: bool, items: Vec<(String, String)>) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || engine::apply_elevated(on, &items)).await.map_err(|e| e.to_string())?
@@ -328,7 +334,7 @@ fn main() {
         .plugin(tauri_plugin_single_instance::init(|app, _, _| show(app)))
         .manage(state)
         .manage(plugins::HostProcess(Mutex::new(None)))
-        .invoke_handler(tauri::generate_handler![report_issue, engine_test, get_snapshot, set_config, get_status, set_device_engine, set_autostart, preview, recent_apps, scan_plugins, get_chain, set_chain, host_status, open_plugin_window, audio_apps, list_flows, get_flow, set_flow, delete_flow, get_stats, plugin_env, engine_devices, set_engine, get_levels, check_update, install_update])
+        .invoke_handler(tauri::generate_handler![engine_outdated, report_issue, engine_test, get_snapshot, set_config, get_status, set_device_engine, set_autostart, preview, recent_apps, scan_plugins, get_chain, set_chain, host_status, open_plugin_window, audio_apps, list_flows, get_flow, set_flow, delete_flow, get_stats, plugin_env, engine_devices, set_engine, get_levels, check_update, install_update])
         .setup(|app| {
             let show_i = MenuItem::with_id(app, "show", "Abrir", true, None::<&str>)?;
             let toggle_i = MenuItem::with_id(app, "toggle", "Ligar/Desligar surround", true, None::<&str>)?;
