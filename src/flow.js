@@ -162,8 +162,10 @@ function nodeInfo(n) {
     case "send": { const d = devName(n.device); return [d ? `Enviar: ${d.device || d.name}` : "Enviar", d ? `${d.name} · ~30 ms depois` : "escolha o destino", "↗"]; }
     case "fx": { const f = FX[n.fx] || { name: n.fx, glyph: "?" }; return [f.name, f.unit !== undefined ? `${n.value} ${f.unit}`.trim() : f.hint || "bloco nativo", f.glyph]; }
     case "rack": {
-      const names = (n.plugins || []).map((i) => doc().plugins[i]).filter(Boolean).map((p) => (p.enabled ? "" : "⏻") + plName(p));
-      return ["Rack de VST", names.length ? names.join(" → ") : "vazio: clique para adicionar plugins", "▤"];
+      const list = (n.plugins || []).map((i) => doc().plugins[i]).filter(Boolean);
+      if (list.length === 1) { const p = list[0]; return [plName(p), p.enabled ? `VST · ${plFormat(p)}` : "VST · desligado", "✦"]; }
+      const names = list.map((p) => (p.enabled ? "" : "⏻") + plName(p));
+      return ["VST", names.length ? names.join(" → ") : "vazio: clique para escolher o plugin", "✦"];
     }
     case "plugin": {
       const p = doc().plugins[n.plugin];
@@ -282,8 +284,8 @@ function flPanel() {
           <button class="icon" data-rk-del="${i}" title="Tirar do rack">×</button>
         </div>`;
       }).join("") : `<p class="desc">Nenhum plugin ainda. O som passa direto.</p>`}</div>
-        <button class="pill solid" id="rk-add">Adicionar VST…</button>
-        <p class="desc">O som passa pelos plugins de cima para baixo.</p>`;
+        <button class="pill solid" id="rk-add">${list.length ? "Adicionar outro plugin…" : "Escolher plugin…"}</button>
+        ${list.length > 1 ? `<p class="desc">O som passa pelos plugins de cima para baixo.</p>` : ""}`;
     }
     if (n.kind === "send") {
       const outs = PL.devices.filter((d) => d.kind === "Saída" && d.id !== owner());
@@ -441,9 +443,8 @@ function catalogItems() {
       ...outs.map((d) => ({ k: "app", ic: "👂", t: `Ouvir: ${d.device || d.name}`, d: `${d.name} · tudo o que toca nesta saída`, node: { kind: "listen", device: d.id } })),
     ]],
     ["Efeitos nativos", Object.entries(FX).map(([id, f]) => ({ k: "fx", ic: f.glyph, t: f.name, d: f.desc, node: { kind: "fx", fx: id, value: f.def ?? 0 } }))],
-    ["Plugins", [
-      { k: "plugin", ic: "▤", t: "Rack de VST", d: "Vários plugins em sequência numa caixa só", node: { kind: "rack", plugins: [] } },
-      { k: "plugin", ic: "⌕", t: "Abrir navegador de plugins…", d: "Um plugin solto, com busca e filtros", browser: true },
+    ["VST", [
+      { k: "plugin", ic: "✦", t: "VST", d: "Escolha o plugin (VST3, VST2, CLAP); dá para pôr vários em fila", browser: true },
       ...PL.found.filter((f) => f.supported !== false && pbFavs().includes(pbKey(f)))
         .map((f) => ({ k: "plugin", ic: "★", t: f.name || baseName(f.path), d: `favorito · ${f.format || "VST3"}`, plugin: f.path })),
     ]],
@@ -484,7 +485,7 @@ function flCreate(it) {
   let node;
   if (it.plugin) {
     doc().plugins.push({ path: it.plugin, enabled: true });
-    node = { id: uid("p"), kind: "plugin", plugin: doc().plugins.length - 1 };
+    node = { id: uid("v"), kind: "rack", plugins: [doc().plugins.length - 1] };
   } else {
     node = { id: uid(it.node.kind[0]), ...it.node };
   }
