@@ -344,3 +344,106 @@ async function init() {
 }
 
 init();
+
+// ---------- plugins (cadeia de VST3 por dispositivo) ----------
+const PL = { device: null, chain: { plugins: [] }, found: [], devices: [] };
+const baseName = (p) => String(p).split(/[\\/]/).pop().replace(/\.vst3$/i, "");
+
+async function plLoadDevices() {
+  const s = await invoke("get_status");
+  PL.devices = [
+    ...s.outputs.map((d) => ({ ...d, kind: "Saída" })),
+    ...s.inputs.map((d) => ({ ...d, kind: "Microfone" })),
+  ];
+  if (!PL.device) PL.device = s.output?.id || PL.devices[0]?.id || null;
+  $("#pl-device").innerHTML = PL.devices
+    .map((d) => `<option value="${d.id}"${d.id === PL.device ? " selected" : ""}>${esc(`${d.kind}: ${d.name} (${d.device})`)}</option>`)
+    .join("");
+}
+
+async function plLoadChain() {
+  if (!PL.device) return;
+  try { PL.chain = await invoke("get_chain", { endpoint: PL.device }); } catch (e) { PL.chain = { plugins: [] }; }
+  plRender();
+}
+
+async function plScan() {
+  $("#pl-found").innerHTML = `<option>Procurando plugins…</option>`;
+  try { PL.found = await invoke("scan_plugins"); } catch (e) { PL.found = []; $("#error").textContent = String(e); $("#error").hidden = false; }
+  $("#pl-found").innerHTML = PL.found.length
+    ? PL.found.map((f, i) => `<option value="${i}">${esc(f.name || baseName(f.path))}</option>`).join("")
+    : `<option value="">Nenhum VST3 encontrado nas pastas padrão</option>`;
+}
+
+function plRender() {
+  const list = PL.chain.plugins;
+  const rows = list.map((p, i) => `
+    <li class="${p.enabled ? "" : "off"}">
+      <label class="toggle" title="Ligar ou desligar este plugin"><input type="checkbox" data-pl-on="${i}"${p.enabled ? " checked" : ""}><span></span></label>
+      <div><div class="pname">${esc(baseName(p.path))}</div><div class="ppath">${esc(p.path)}</div></div>
+      <div class="pactions">
+        <button data-pl-up="${i}" title="Subir"${i === 0 ? " disabled" : ""}>↑</button>
+        <button data-pl-down="${i}" title="Descer"${i === list.length - 1 ? " disabled" : ""}>↓</button>
+        <button data-pl-win="${i}" title="Abrir a janela do plugin (em breve)" disabled>▣</button>
+        <button data-pl-del="${i}" title="Remover">×</button>
+      </div>
+    </li>`).join("");
+  $("#pl-chain").innerHTML = (rows || `<li class="fixed empty-row"><span></span><span class="empty">Nenhum plugin ainda. Adicione um abaixo.</span></li>`) +
+    `<li class="fixed"><span></span><div><div class="pname">Surround Rescue</div><div class="ppath">surround, equalizador e anti-estouro (sempre por último)</div></div></li>`;
+  invoke("host_status").then((h) => {
+    $("#pl-engine").textContent = !h.found
+      ? "O executor de VST não foi encontrado nesta instalação."
+      : `Executor de VST ${h.running ? "rodando" : "parado (sobe sozinho ao adicionar um plugin)"}. Os plugins só tocam em dispositivos com o motor próprio do Surround Rescue (em teste).`;
+  });
+}
+
+async function plSave() {
+  try {
+    await invoke("set_chain", { endpoint: PL.device, chain: PL.chain });
+    $("#error").hidden = true;
+  } catch (e) { $("#error").textContent = String(e); $("#error").hidden = false; }
+  plRender();
+}
+
+function plBind() {
+  $("#pl-device").addEventListener("change", (e) => { PL.device = e.target.value; plLoadChain(); });
+  $("#pl-rescan").addEventListener("click", plScan);
+  $("#pl-add").addEventListener("click", () => {
+    const f = PL.found[Number($("#pl-found").value)];
+    if (!f) return;
+    PL.chain.plugins.push({ path: f.path, enabled: true });
+    plSave();
+  });
+  $("#pl-add-path").addEventListener("click", () => {
+    const p = $("#pl-path").value.trim().replace(/^"|"$/g, "");
+    if (!/\.vst3$/i.test(p)) { $("#error").textContent = "Informe o caminho de um arquivo ou pasta .vst3."; $("#error").hidden = false; return; }
+    PL.chain.plugins.push({ path: p, enabled: true });
+    $("#pl-path").value = "";
+    plSave();
+  });
+  $("#pl-chain").addEventListener("click", (e) => {
+    const t = e.target.closest("button");
+    if (!t) return;
+    const L = PL.chain.plugins;
+    const i = Number(t.dataset.plUp ?? t.dataset.plDown ?? t.dataset.plDel);
+    if (t.dataset.plUp !== undefined && i > 0) [L[i - 1], L[i]] = [L[i], L[i - 1]];
+    else if (t.dataset.plDown !== undefined && i < L.length - 1) [L[i + 1], L[i]] = [L[i], L[i + 1]];
+    else if (t.dataset.plDel !== undefined) L.splice(i, 1);
+    else return;
+    plSave();
+  });
+  $("#pl-chain").addEventListener("change", (e) => {
+    const i = e.target.dataset.plOn;
+    if (i === undefined) return;
+    PL.chain.plugins[Number(i)].enabled = e.target.checked;
+    plSave();
+  });
+  // carrega ao abrir a aba
+  $$("#tabs button").forEach((b) => b.addEventListener("click", async () => {
+    if (b.dataset.tab !== "plugins") return;
+    await plLoadDevices();
+    await plLoadChain();
+    if (!PL.found.length) plScan();
+  }));
+}
+plBind();

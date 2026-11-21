@@ -2,6 +2,7 @@
 
 mod devices;
 mod eqapo;
+mod plugins;
 mod profiles;
 mod system;
 
@@ -59,10 +60,31 @@ fn apply_now(state: &AppState) -> Result<String, String> {
     let mut last = state.last_text.lock().unwrap();
     if *last != joined {
         system::apply(&root, &out, &mic_txt)?;
+        // motor próprio (APO Surround Rescue): um arquivo por dispositivo
+        if let Some(d) = &hp {
+            engine_write(&d.id, serde_json::json!({ "kind": "output", "settings": profile.settings }));
+        }
+        if let Some(d) = &mic {
+            engine_write(&d.id, serde_json::json!({ "kind": "mic", "mic": cfg.mic }));
+        }
         *last = joined;
     }
     *state.applied.lock().unwrap() = profile.name.clone();
     Ok(profile.name)
+}
+
+/// Grava a configuração lida pelo APO próprio (ProgramData\SurroundRescue\engine\{guid}.json).
+fn engine_write(endpoint: &str, v: serde_json::Value) {
+    let base = std::env::var("ProgramData").unwrap_or_else(|_| r"C:\ProgramData".into());
+    let dir = std::path::PathBuf::from(base).join("SurroundRescue").join("engine");
+    if fs::create_dir_all(&dir).is_err() {
+        return;
+    }
+    let f = dir.join(format!("{}.json", endpoint.to_lowercase()));
+    let tmp = f.with_extension("tmp");
+    if fs::write(&tmp, v.to_string()).is_ok() {
+        let _ = fs::rename(&tmp, &f);
+    }
 }
 
 #[derive(Serialize, Clone)]
@@ -125,6 +147,28 @@ fn preview(state: State<AppState>) -> String {
 }
 
 #[tauri::command]
+fn scan_plugins() -> Result<Vec<plugins::Found>, String> {
+    plugins::scan()
+}
+
+#[tauri::command]
+fn get_chain(endpoint: String) -> Result<plugins::Chain, String> {
+    plugins::get_chain(&endpoint)
+}
+
+#[tauri::command]
+fn set_chain(endpoint: String, chain: plugins::Chain, host: State<plugins::HostProcess>) -> Result<(), String> {
+    plugins::set_chain(&endpoint, &chain)?;
+    host.ensure();
+    Ok(())
+}
+
+#[tauri::command]
+fn host_status(host: State<plugins::HostProcess>) -> serde_json::Value {
+    serde_json::json!({ "running": host.running(), "found": plugins::host_exe().is_some() })
+}
+
+#[tauri::command]
 fn recent_apps(state: State<AppState>) -> Vec<String> {
     state.seen.lock().unwrap().iter().cloned().collect()
 }
@@ -163,7 +207,8 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _, _| show(app)))
         .manage(state)
-        .invoke_handler(tauri::generate_handler![get_snapshot, set_config, get_status, set_device_engine, set_autostart, preview, recent_apps])
+        .manage(plugins::HostProcess(Mutex::new(None)))
+        .invoke_handler(tauri::generate_handler![get_snapshot, set_config, get_status, set_device_engine, set_autostart, preview, recent_apps, scan_plugins, get_chain, set_chain, host_status])
         .setup(|app| {
             let show_i = MenuItem::with_id(app, "show", "Abrir", true, None::<&str>)?;
             let toggle_i = MenuItem::with_id(app, "toggle", "Ligar/Desligar surround", true, None::<&str>)?;
@@ -191,6 +236,8 @@ fn main() {
                     let _ = w.hide();
                 }
             }
+            // executor de VST: sobe se já houver cadeias salvas
+            app.state::<plugins::HostProcess>().ensure();
             // Troca automática de perfil pelo programa em foco
             let handle = app.handle().clone();
             std::thread::spawn(move || loop {

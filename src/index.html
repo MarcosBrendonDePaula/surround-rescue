@@ -18,6 +18,7 @@
       <button data-tab="audio"><svg viewBox="0 0 24 24"><path d="M4 9h4l5-4v14l-5-4H4z"/><path d="M16.5 8.5a5 5 0 0 1 0 7"/></svg>Áudio</button>
       <button data-tab="equalizador"><svg viewBox="0 0 24 24"><path d="M6 4v16M12 4v16M18 4v16"/><circle cx="6" cy="14" r="2"/><circle cx="12" cy="8" r="2"/><circle cx="18" cy="16" r="2"/></svg>Equalizador</button>
       <button data-tab="microfone"><svg viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21"/></svg>Microfone</button>
+      <button data-tab="plugins"><svg viewBox="0 0 24 24"><path d="M9 3v5M15 3v5"/><rect x="5" y="8" width="14" height="6" rx="2"/><path d="M12 14v3a3 3 0 0 1-3 3"/></svg>Plugins</button>
       <button data-tab="perfis"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M7 10h6M7 14h10"/></svg>Perfis</button>
       <button data-tab="configuracoes"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M5.6 18.4l2.1-2.1M16.3 7.7l2.1-2.1"/></svg>Configurações</button>
     </nav>
@@ -139,6 +140,26 @@
               <input type="range" data-m="clarity" min="0" max="100" step="1">
             </div>
           </div>
+        </div>
+      </section>
+
+      <!-- PLUGINS -->
+      <section id="tab-plugins" class="tab">
+        <div class="eqhead">
+          <h1>Plugins</h1>
+          <select id="pl-device" aria-label="Dispositivo"></select>
+        </div>
+        <p class="lead">Qualquer efeito VST3 vira efeito do Windows inteiro neste dispositivo. A ordem importa: o som passa de cima para baixo e o Surround Rescue com o anti-estouro entra sempre por último.</p>
+        <p class="note" id="pl-engine"></p>
+        <ol class="chain" id="pl-chain"></ol>
+        <div class="addrule">
+          <select id="pl-found" aria-label="Plugins instalados"></select>
+          <button class="pill solid" id="pl-add">Adicionar plugin</button>
+          <button class="pill" id="pl-rescan">Procurar de novo</button>
+        </div>
+        <div class="addrule" style="margin-top:8px">
+          <input id="pl-path" placeholder="Ou cole o caminho de um .vst3" aria-label="Caminho do plugin">
+          <button class="pill" id="pl-add-path">Adicionar caminho</button>
         </div>
       </section>
 

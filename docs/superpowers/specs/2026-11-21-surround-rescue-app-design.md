@@ -56,3 +56,12 @@ A lógica de áudio (`eqapo.rs`) já está isolada do motor para permitir a troc
 - Validado na Realtek Digital Output: Initialize → GUID do endpoint → LockForProcess 48 kHz/2 ch → prova de vida.
 - Interfaces opcionais consultadas pelo audiodg (respondemos E_NOINTERFACE): IAudioSystemEffects2/3,
   IAudioProcessingObjectNotifications, IAudioProcessingObjectLoggingService etc. — candidatas a implementar depois.
+
+## Etapas 2 e 3 (2026-11-21, manhã)
+- `sr-ipc`: canal APO↔executor. Só serviços criam objetos `Global\`: o APO cria, o executor conecta.
+- `sr-host`: executor de VST3 (biblioteca `vst3-host`, MIT). Cadeia por dispositivo em
+  `ProgramData\SurroundRescue\chains\{guid}.json`; plugins carregados fora do atendimento do áudio.
+  Ponta a ponta local: 299/300 blocos pelo VST, pior ida e volta 0,13 ms.
+- App: aba Plugins (dispositivo, adicionar da varredura ou por caminho, ligar/desligar, reordenar, remover);
+  sobe o executor quando há cadeias; grava `engine\{guid}.json` para o APO próprio.
+- Falta: janela (editor) do plugin, teste no Kraken com o APO próprio, empacotar sr-apo/sr-host no instalador.

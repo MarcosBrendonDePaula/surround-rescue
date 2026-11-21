@@ -51,13 +51,15 @@ fn run_device(endpoint: String, file: PathBuf, stop: Arc<AtomicBool>) {
     let mut last_check = sr_ipc::now_ms();
     while !stop.load(Ordering::SeqCst) {
         ch.heartbeat();
+        // carrega/recarrega a cadeia FORA do atendimento do áudio, na taxa que o APO está usando
+        let sr = ch.header().sample_rate.load(Ordering::Relaxed);
+        if sr > 0 && chain.as_ref().map(|c| c.sample_rate() != sr as f64).unwrap_or(true) {
+            log(&format!("{endpoint}: preparando cadeia a {sr} Hz"));
+            chain = Some(Chain::load(&cfg, sr as f64, &log));
+        }
         ch.serve(50, |audio, sr, chs| {
-            let need_reload = chain.as_ref().map(|c| c.sample_rate() != sr as f64).unwrap_or(true);
-            if need_reload {
-                log(&format!("{endpoint}: preparando cadeia a {sr} Hz"));
-                chain = Some(Chain::load(&cfg, sr as f64, &log));
-            }
-            if let Some(c) = chain.as_mut() {
+            // taxa mudou no meio: passa direto neste bloco, a cadeia é refeita no próximo ciclo
+            if let Some(c) = chain.as_mut().filter(|c| c.sample_rate() == sr as f64) {
                 c.process(audio, chs as usize);
             }
         });
@@ -69,7 +71,7 @@ fn run_device(endpoint: String, file: PathBuf, stop: Arc<AtomicBool>) {
                 seen = m;
                 cfg = read_chain(&file);
                 log(&format!("{endpoint}: cadeia alterada ({} plugins)", cfg.plugins.len()));
-                chain = None; // recarrega no próximo bloco, já na taxa certa
+                chain = None;
             }
         }
     }
