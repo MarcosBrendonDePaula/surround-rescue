@@ -67,6 +67,7 @@ struct Device {
     slot: Slot,
     stop: Arc<AtomicBool>,
     timing: Arc<stats::Timing>,
+    meters: Option<Arc<chain::Meters>>,
 }
 
 impl Device {
@@ -85,6 +86,7 @@ impl Device {
             slot: Arc::new(Mutex::new(None)),
             stop: Arc::new(AtomicBool::new(false)),
             timing: stats::Timing::new(),
+            meters: None,
         }
     }
 
@@ -120,7 +122,9 @@ impl Device {
         let io = build_io(&self.endpoint, self.cfg.graph.as_ref(), sr);
         self.senders = io.senders;
         self.captures = io.captures;
-        *self.slot.lock().unwrap() = Some(AudioChain::new(&self.loaded, &self.cfg, sr as f64, io.producers, io.consumers, &log));
+        let ch = AudioChain::new(&self.loaded, &self.cfg, sr as f64, io.producers, io.consumers, &log);
+        self.meters = Some(ch.meters.clone());
+        *self.slot.lock().unwrap() = Some(ch);
     }
 
     /// Ciclo lento (1 s): canal, mudanças no arquivo e na taxa.
@@ -330,6 +334,7 @@ fn run() {
     let mut last_tick = Instant::now() - Duration::from_secs(10);
     let mut last_save = Instant::now();
     let mut last_stats = Instant::now();
+    let mut last_levels = Instant::now();
     loop {
         pump_messages();
         for d in devices.values_mut() {
@@ -415,6 +420,26 @@ fn run() {
                 all.push(f.stats());
             }
             stats::write(&all);
+        }
+        // níveis de cada caixa para os medidores da mesa (~15 vezes por segundo)
+        if last_levels.elapsed() >= Duration::from_millis(66) {
+            last_levels = Instant::now();
+            let mut lv = serde_json::Map::new();
+            for d in devices.values().filter(|d| d.channel.is_some()) {
+                if let Some(m) = &d.meters {
+                    lv.insert(d.endpoint.clone(), serde_json::json!(m.take().into_iter().collect::<HashMap<_, _>>()));
+                }
+            }
+            for f in free_flows.values() {
+                if let Some(m) = f.meters() {
+                    lv.insert(f.id.clone(), serde_json::json!(m.take().into_iter().collect::<HashMap<_, _>>()));
+                }
+            }
+            let p = chain::root_dir().join("levels.json");
+            let tmp = p.with_extension("ltmp");
+            if std::fs::write(&tmp, serde_json::Value::Object(lv).to_string()).is_ok() {
+                let _ = std::fs::rename(&tmp, &p);
+            }
         }
         // ajustes salvos de tempos em tempos (caso o executor seja fechado à força)
         if last_save.elapsed() >= Duration::from_secs(30) {

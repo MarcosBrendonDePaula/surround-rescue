@@ -201,6 +201,11 @@ fn plugin_env() -> serde_json::Value {
 }
 
 #[tauri::command]
+fn get_levels() -> serde_json::Value {
+    plugins::read_levels()
+}
+
+#[tauri::command]
 fn get_stats() -> serde_json::Value {
     plugins::read_stats()
 }
@@ -277,7 +282,7 @@ fn main() {
         .plugin(tauri_plugin_single_instance::init(|app, _, _| show(app)))
         .manage(state)
         .manage(plugins::HostProcess(Mutex::new(None)))
-        .invoke_handler(tauri::generate_handler![get_snapshot, set_config, get_status, set_device_engine, set_autostart, preview, recent_apps, scan_plugins, get_chain, set_chain, host_status, open_plugin_window, audio_apps, list_flows, get_flow, set_flow, delete_flow, get_stats, plugin_env, engine_devices, set_engine])
+        .invoke_handler(tauri::generate_handler![get_snapshot, set_config, get_status, set_device_engine, set_autostart, preview, recent_apps, scan_plugins, get_chain, set_chain, host_status, open_plugin_window, audio_apps, list_flows, get_flow, set_flow, delete_flow, get_stats, plugin_env, engine_devices, set_engine, get_levels])
         .setup(|app| {
             let show_i = MenuItem::with_id(app, "show", "Abrir", true, None::<&str>)?;
             let toggle_i = MenuItem::with_id(app, "toggle", "Ligar/Desligar surround", true, None::<&str>)?;

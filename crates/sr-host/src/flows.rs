@@ -68,9 +68,15 @@ pub struct Flow {
     stop: Arc<AtomicBool>,
     clock: Option<std::thread::JoinHandle<()>>,
     timing: Arc<crate::stats::Timing>,
+    meters: Option<Arc<crate::chain::Meters>>,
 }
 
 impl Flow {
+    /// Medidores da cadeia em execução (None = parado).
+    pub fn meters(&self) -> Option<&Arc<crate::chain::Meters>> {
+        if self.running { self.meters.as_ref() } else { None }
+    }
+
     pub fn new(id: String, file: PathBuf) -> Flow {
         Flow {
             cfg: read(&file),
@@ -86,6 +92,7 @@ impl Flow {
             stop: Arc::new(AtomicBool::new(false)),
             clock: None,
             timing: crate::stats::Timing::new(),
+            meters: None,
         }
     }
 
@@ -106,6 +113,7 @@ impl Flow {
         self.senders = io.senders;
         self.captures = io.captures;
         let ch = AudioChain::new(&self.loaded, &self.cfg.chain, RATE as f64, io.producers, io.consumers, &log);
+        self.meters = Some(ch.meters.clone());
         *self.slot.lock().unwrap() = Some(Some(ch));
         if self.clock.is_none() {
             let (slot, stop, timing) = (self.slot.clone(), self.stop.clone(), self.timing.clone());

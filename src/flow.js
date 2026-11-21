@@ -289,18 +289,22 @@ function flPanel() {
   } else {
     const n = g.nodes.find((x) => x.id === FL.sel.node);
     if (!n) { FL.sel = null; return flPanel(); }
-    const [t, sub] = nodeInfo(n);
-    h = `<div class="fl-drawer-head"><h2>${esc(trunc(t, 24))}</h2><button class="icon" data-close>×</button></div><p class="desc">${esc(sub)}</p>`;
+    const [t, sub, gl] = nodeInfo(n);
+    if (FL.rkNode !== n.id) { FL.rkNode = n.id; FL.rkSel = 0; }
+    h = `<div class="fl-drawer-head"><div class="fl-modal-title"><span class="strip-ic big k-${n.kind}">${iconHtml(gl)}</span><div><h2>${esc(t)}</h2><p class="desc">${esc(sub)}</p></div></div><button class="icon" data-close title="Fechar (Esc)">×</button></div>`;
     if (n.kind === "plugin") {
       const p = doc().plugins[n.plugin];
       h += `<button class="pill solid" id="fl-open">Abrir janela do plugin</button><button class="pill" id="fl-toggle">${p?.enabled ? "Desligar" : "Ligar"}</button>`;
     }
     if (n.kind === "rack") {
       const list = n.plugins || (n.plugins = []);
-      h += `<div class="rk-list">${list.length ? list.map((pi, i) => {
+      const sel = Math.min(FL.rkSel ?? 0, Math.max(0, list.length - 1));
+      FL.rkSel = sel;
+      const sp = doc().plugins[list[sel]];
+      h += `<div class="rk"><div class="rk-list">${list.length ? list.map((pi, i) => {
         const p = doc().plugins[pi];
         if (!p) return "";
-        return `<div class="rk-row${p.enabled ? "" : " off"}" data-rk="${i}">
+        return `<div class="rk-row${p.enabled ? "" : " off"}${i === sel ? " sel" : ""}" data-rk="${i}">
           <span class="rk-n">${i + 1}</span>
           <span class="rk-name" title="${esc(p.path)}">${esc(plName(p))}<small>${esc(plFormat(p))}</small></span>
           <button class="icon" data-rk-up="${i}" title="Subir"${i === 0 ? " disabled" : ""}>▲</button>
@@ -309,8 +313,15 @@ function flPanel() {
           <button class="icon" data-rk-win="${i}" title="Abrir janela do plugin">⧉</button>
           <button class="icon" data-rk-del="${i}" title="Tirar do rack">×</button>
         </div>`;
-      }).join("") : `<p class="desc">Nenhum plugin ainda. O som passa direto.</p>`}</div>
-        <button class="pill solid" id="rk-add">${list.length ? "Adicionar outro plugin…" : "Escolher plugin…"}</button>
+      }).join("") : `<p class="desc">Nenhum plugin ainda. O som passa direto.</p>`}
+        <button class="pill solid" id="rk-add">${list.length ? "Adicionar outro plugin…" : "Escolher plugin…"}</button></div>
+        <div class="rk-detail">${sp ? `<div class="rk-big">${iconHtml("vst")}<div><h3>${esc(plName(sp))}</h3><p class="desc">${esc(plFormat(sp))} · ${sp.enabled ? "ligado" : "desligado"}</p></div></div>
+          <p class="rk-path" title="${esc(sp.path)}">${esc(sp.path)}</p>
+          <div class="rk-actions"><button class="pill solid" data-rk-win="${sel}">Abrir a janela do plugin</button>
+          <button class="pill" data-rk-on="${sel}">${sp.enabled ? "Desligar (bypass)" : "Ligar"}</button>
+          <button class="pill" data-rk-del="${sel}">Tirar da caixa</button></div>
+          <p class="desc">A janela do próprio plugin abre separada (é dela que vêm os ajustes). Os ajustes ficam salvos com o fluxo.</p>`
+          : `<p class="desc">Escolha um plugin para esta caixa.</p>`}</div></div>
         ${list.length > 1 ? `<p class="desc">O som passa pelos plugins de cima para baixo.</p>` : ""}`;
     }
     if (n.kind === "send") {
@@ -352,7 +363,8 @@ function flPanel() {
     const ins = g.edges.map((e, i) => [e, i]).filter(([e]) => e.to === n.id);
     if (ins.length && ["mixer", "output", "send", "tomic"].includes(n.kind)) {
       h += `<div class="flabel" style="margin-top:6px"><span>Mesa de som</span><span class="desc" style="margin:0">${ins.length} entrada${ins.length > 1 ? "s" : ""}</span></div>
-        <div class="mx">${ins.map(([e, i]) => mixStrip(g, e, i)).join("")}</div>`;
+        <div class="mx">${ins.map(([e, i]) => mixStrip(g, e, i)).join("")}${masterStrip(n)}</div>
+        <p class="desc">Duplo clique no fader volta a 0 dB; no pan, volta ao centro. S = solo: só as entradas em solo tocam.</p>`;
     }
     if (["input", "output"].includes(n.kind)) h += `<p class="desc">Esta caixa é fixa.</p>`;
     else h += `<button class="pill" id="fl-del-node">Remover caixa</button>`;
@@ -365,10 +377,15 @@ function flPanel() {
         flChanged();
         flPanel();
       }));
+      box.querySelectorAll(".rk-row").forEach((row) => row.addEventListener("click", (ev) => {
+        if (ev.target.closest("button")) return;
+        FL.rkSel = Number(row.dataset.rk);
+        flPanel();
+      }));
       box.querySelectorAll("[data-rk-up],[data-rk-down],[data-rk-on],[data-rk-win],[data-rk-del]").forEach((b) => b.addEventListener("click", () => {
         const d = b.dataset, l = n.plugins;
-        if (d.rkUp !== undefined) { const i = +d.rkUp; [l[i - 1], l[i]] = [l[i], l[i - 1]]; }
-        else if (d.rkDown !== undefined) { const i = +d.rkDown; [l[i + 1], l[i]] = [l[i], l[i + 1]]; }
+        if (d.rkUp !== undefined) { const i = +d.rkUp; [l[i - 1], l[i]] = [l[i], l[i - 1]]; FL.rkSel = i - 1; }
+        else if (d.rkDown !== undefined) { const i = +d.rkDown; [l[i + 1], l[i]] = [l[i], l[i + 1]]; FL.rkSel = i + 1; }
         else if (d.rkOn !== undefined) { const p = doc().plugins[l[+d.rkOn]]; p.enabled = !p.enabled; }
         else if (d.rkWin !== undefined) { return flOpen({ plugin: l[+d.rkWin] }); }
         else if (d.rkDel !== undefined) { const pi = l[+d.rkDel]; l.splice(+d.rkDel, 1); dropPlugin(pi); }
@@ -384,6 +401,7 @@ function flPanel() {
     $("#fl-listen-dev")?.addEventListener("change", (e) => { n.device = e.target.value; flChanged(); });
     $("#fl-app-exe")?.addEventListener("change", (e) => { n.exe = e.target.value.trim().toLowerCase(); flChanged(); });
     bindMixer(box, g);
+    startMeters(box, g);
     const fv = $("#fl-fx-val");
     if (fv) {
       fillPct(fv);
@@ -398,16 +416,64 @@ const toDb = (g) => (g <= 0.001 ? -60 : Math.max(-60, Math.min(6, 20 * Math.log1
 const fromDb = (db) => (db <= -59.9 ? 0 : 10 ** (db / 20));
 const dbText = (g) => (g <= 0.001 ? "−∞" : `${toDb(g) > 0 ? "+" : ""}${fmt(toDb(g), 1)}`);
 
+const panText = (p) => (Math.abs(p) < 0.005 ? "C" : `${p < 0 ? "E" : "D"} ${Math.round(Math.abs(p) * 100)}`);
 function mixStrip(g, e, i) {
   const src = g.nodes.find((x) => x.id === e.from);
   const [name, , glyph] = src ? nodeInfo(src) : ["?", "", "unknown"];
-  return `<div class="strip${e.mute ? " muted" : ""}" data-edge-i="${i}">
+  const pan = e.pan || 0;
+  return `<div class="strip${e.mute ? " muted" : ""}${e.solo ? " soloed" : ""}" data-edge-i="${i}" data-src="${esc(e.from)}">
     <span class="strip-ic">${iconHtml(glyph)}</span>
+    <span class="strip-name" title="${esc(name)}">${esc(trunc(name, 12))}</span>
+    <div class="strip-pan"><input type="range" class="pan" min="-100" max="100" step="1" value="${Math.round(pan * 100)}" aria-label="Pan de ${esc(name)}"><output>${panText(pan)}</output></div>
+    <div class="strip-body">
+      <div class="meter" aria-hidden="true"><i></i><b></b></div>
+      <input type="range" class="fader" min="-60" max="6" step="0.5" value="${toDb(e.gain)}" aria-label="Volume de ${esc(name)}">
+    </div>
     <output class="strip-db">${dbText(e.gain)}</output>
-    <input type="range" class="fader" min="-60" max="6" step="0.5" value="${toDb(e.gain)}" aria-label="Volume de ${esc(name)}">
-    <button class="strip-mute" title="Mudo">M</button>
-    <span class="strip-name" title="${esc(name)}">${esc(trunc(name, 9))}</span>
+    <div class="strip-ms"><button class="strip-mute" title="Mudo">M</button><button class="strip-solo" title="Solo (só as entradas em solo tocam)">S</button></div>
   </div>`;
+}
+/// Canal master: nível do que sai da caixa.
+function masterStrip(n) {
+  return `<div class="strip master" data-master="${esc(n.id)}">
+    <span class="strip-ic">${iconHtml("out")}</span>
+    <span class="strip-name">Master</span>
+    <div class="strip-pan"></div>
+    <div class="strip-body"><div class="meter wide" aria-hidden="true"><i></i><b></b></div></div>
+    <output class="strip-db strip-peak">−∞</output>
+    <div class="strip-ms"></div>
+  </div>`;
+}
+/// Medidores: pede os níveis ao executor enquanto a mesa está aberta.
+const meterPct = (v) => Math.max(0, Math.min(100, ((20 * Math.log10(Math.max(v, 1e-6)) + 60) / 66) * 100));
+function meterSet(el, v) {
+  if (!el) return;
+  const pct = meterPct(v);
+  const hold = Math.max(pct, (Number(el.dataset.hold) || 0) - 1.2);
+  el.dataset.hold = hold;
+  el.querySelector("i").style.height = `${pct}%`;
+  el.querySelector("b").style.bottom = `${hold}%`;
+  el.classList.toggle("hot", v >= 0.89);
+}
+function startMeters(box, g) {
+  clearInterval(FL.meterTimer);
+  if (!box.querySelector(".meter")) return;
+  FL.meterTimer = setInterval(async () => {
+    if (box.hidden || !document.body.contains(box)) return clearInterval(FL.meterTimer);
+    let lv;
+    try { const all = await invoke("get_levels"); lv = all[owner()] || all[String(owner()).toLowerCase()] || {}; } catch (e) { return; }
+    box.querySelectorAll(".strip[data-edge-i]").forEach((st) => {
+      const e = g.edges[Number(st.dataset.edgeI)];
+      if (!e) return;
+      const v = (lv[st.dataset.src] || 0) * (e.mute ? 0 : e.gain);
+      meterSet(st.querySelector(".meter"), v);
+    });
+    box.querySelectorAll(".strip[data-master]").forEach((st) => {
+      const v = lv[st.dataset.master] || 0;
+      meterSet(st.querySelector(".meter"), v);
+      st.querySelector(".strip-peak").textContent = v > 1e-6 ? `${fmt(20 * Math.log10(v), 1)}` : "−∞";
+    });
+  }, 70);
 }
 
 function bindMixer(box, g) {
@@ -431,6 +497,14 @@ function bindMixer(box, g) {
       flSaveSoon();
       flRender();
     });
+    st.querySelector(".strip-solo").addEventListener("click", () => {
+      e.solo = !e.solo;
+      st.classList.toggle("soloed", e.solo);
+      flSaveSoon();
+    });
+    const pan = st.querySelector(".pan"), po = st.querySelector(".strip-pan output");
+    pan.addEventListener("input", () => { e.pan = Number(pan.value) / 100; po.textContent = panText(e.pan); flSaveSoon(); });
+    pan.addEventListener("dblclick", () => { e.pan = 0; pan.value = 0; po.textContent = "C"; flSaveSoon(); });
   });
 }
 
@@ -631,6 +705,9 @@ function flFit() {
 
 // ---------- eventos ----------
 function flBind() {
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && !$("#fl-panel").hidden && $("#pb").hidden) { FL.sel = null; clearInterval(FL.meterTimer); flRender(); flPanel(); }
+  });
   const svg = $("#fl-canvas");
   svg.addEventListener("pointerdown", (ev) => {
     const g = graph();

@@ -331,6 +331,41 @@ impl crate::graph::Processor for NodeProcs {
 }
 
 /// Lado do áudio: o fluxo planejado, os plugins e buffers próprios (sem alocar no bloco).
+/// Nível de pico de cada caixa (para os medidores da mesa). O áudio grava o maior valor;
+/// quem lê zera. Racks aparecem pelo id da caixa (as partes "id#n" somam no mesmo).
+pub struct Meters {
+    pub ids: Vec<String>,
+    peaks: Vec<std::sync::atomic::AtomicU32>,
+}
+
+impl Meters {
+    fn hit(&self, i: usize, v: f32) {
+        let a = &self.peaks[i];
+        let mut cur = a.load(std::sync::atomic::Ordering::Relaxed);
+        while v > f32::from_bits(cur) {
+            match a.compare_exchange_weak(cur, v.to_bits(), std::sync::atomic::Ordering::Relaxed, std::sync::atomic::Ordering::Relaxed) {
+                Ok(_) => break,
+                Err(x) => cur = x,
+            }
+        }
+    }
+
+    /// Lê e zera: (id da caixa, pico desde a última leitura).
+    pub fn take(&self) -> Vec<(String, f32)> {
+        let mut out: Vec<(String, f32)> = vec![];
+        for (id, p) in self.ids.iter().zip(&self.peaks) {
+            let v = f32::from_bits(p.swap(0, std::sync::atomic::Ordering::Relaxed));
+            let base = id.split('#').next().unwrap_or(id).to_string();
+            match out.iter_mut().find(|(k, _)| *k == base) {
+                // rack: vale o nível da última parte (o que sai da caixa)
+                Some(e) => e.1 = v,
+                None => out.push((base, v)),
+            }
+        }
+        out
+    }
+}
+
 pub struct AudioChain {
     /// Envios para outros dispositivos: (nó, fila da ponte)
     sends: Vec<(usize, sr_bridge::ring::Producer)>,
@@ -338,6 +373,7 @@ pub struct AudioChain {
     procs: NodeProcs,
     bufs: Vec<[Vec<f32>; 2]>,
     sample_rate: f64,
+    pub meters: Arc<Meters>,
 }
 
 impl AudioChain {
@@ -382,11 +418,30 @@ impl AudioChain {
         ab.block_size = 0;
         let bufs = (0..graph.nodes.len()).map(|_| [Vec::with_capacity(MAX_FRAMES), Vec::with_capacity(MAX_FRAMES)]).collect();
         let sends = graph.nodes.iter().enumerate().filter_map(|(i, n)| sends.remove(&n.id).map(|p| (i, p))).collect();
-        AudioChain { sends, plan, procs: NodeProcs { plugins, blocks, sources, ab }, bufs, sample_rate }
+        let meters = Arc::new(Meters {
+            ids: graph.nodes.iter().map(|n| n.id.clone()).collect(),
+            peaks: graph.nodes.iter().map(|_| std::sync::atomic::AtomicU32::new(0)).collect(),
+        });
+        AudioChain { sends, plan, procs: NodeProcs { plugins, blocks, sources, ab }, bufs, sample_rate, meters }
     }
 
     pub fn sample_rate(&self) -> f64 {
         self.sample_rate
+    }
+
+    /// Pico de cada caixa neste bloco (barato: um máximo por amostra).
+    fn measure(&self, frames: usize) {
+        for (i, b) in self.bufs.iter().enumerate() {
+            let mut m = 0.0f32;
+            for c in 0..2 {
+                for v in b[c].iter().take(frames) {
+                    m = m.max(v.abs());
+                }
+            }
+            if m > 0.0 {
+                self.meters.hit(i, m);
+            }
+        }
     }
 
     /// Entrega aos envios (fila cheia = descarta; nunca espera).
@@ -404,6 +459,7 @@ impl AudioChain {
         let Some(plan) = &self.plan else { return };
         crate::graph::run(plan, &mut self.bufs, frames.min(MAX_FRAMES), &mut self.procs);
         self.deliver(frames.min(MAX_FRAMES));
+        self.measure(frames.min(MAX_FRAMES));
     }
 
     /// Processa áudio intercalado (canais 0 e 1; demais passam direto).
@@ -420,6 +476,7 @@ impl AudioChain {
         }
         crate::graph::run(plan, &mut self.bufs, frames, &mut self.procs);
         self.deliver(frames);
+        self.measure(frames);
         let out = &self.bufs[plan.output];
         for c in 0..2 {
             for i in 0..frames {
