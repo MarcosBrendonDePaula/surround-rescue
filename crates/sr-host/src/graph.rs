@@ -27,6 +27,8 @@ pub enum NodeKind {
     },
     /// Envia o que chega aqui para outro dispositivo de saída ({guid}); também repassa adiante.
     Send { device: String },
+    /// Mistura o que chega aqui na voz de um microfone ({guid}); também repassa adiante.
+    Tomic { device: String },
     /// Tudo o que toca numa saída ({guid}), capturado depois da mistura (trigger "Ouvir uma saída")
     Listen { device: String },
     /// Som de um programa (captura por processo), ex.: "spotify.exe"

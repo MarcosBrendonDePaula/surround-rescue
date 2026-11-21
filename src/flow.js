@@ -41,7 +41,7 @@ async function flPollStats() {
 
 function linkName(l) {
   const d = PL.devices.find((x) => x.id.toLowerCase() === String(l.target).toLowerCase());
-  return d ? d.name : l.target;
+  return d ? devFull(d) : l.target;
 }
 
 function flStatsRender() {
@@ -141,6 +141,7 @@ function hasCycle(g) {
 
 const uid = (p) => `${p}${Date.now().toString(36)}${Math.floor(Math.random() * 99)}`;
 const devName = (id) => PL.devices.find((x) => x.id === id);
+const devFull = (d) => (d.device ? `${d.name} (${d.device})` : d.name);
 
 /// Título, subtítulo e ícone de cada caixa.
 function nodeInfo(n) {
@@ -149,9 +150,10 @@ function nodeInfo(n) {
     case "output": return ["Saída", "Surround Rescue + anti-estouro", "◉"];
     case "mixer": return ["Mixer", "soma o que chega", "Σ"];
     case "app": return [n.exe || "Programa", "som só deste programa", "▶"];
-    case "listen": { const d = devName(n.device); return [d ? `Ouvir: ${d.name}` : "Ouvir saída", d ? "tudo o que toca nela" : "escolha a saída", "👂"]; }
-    case "receive": { const d = devName(n.device); return [d ? d.name : "Entrada", d ? d.device : "escolha a entrada", "🎙"]; }
-    case "send": { const d = devName(n.device); return [d ? `Enviar: ${d.name}` : "Enviar", d ? `${d.device} · ~30 ms depois` : "escolha o destino", "↗"]; }
+    case "listen": { const d = devName(n.device); return [d ? `Ouvir: ${d.device || d.name}` : "Ouvir saída", d ? `${d.name} · tudo o que toca nela` : "escolha a saída", "👂"]; }
+    case "receive": { const d = devName(n.device); return [d ? (d.device || d.name) : "Entrada", d ? d.name : "escolha a entrada", "🎙"]; }
+    case "tomic": { const d = devName(n.device); return [d ? `Para o mic: ${d.device || d.name}` : "Mandar para o microfone", d ? `${d.name} · somado à voz` : "escolha o microfone", "🎙"]; }
+    case "send": { const d = devName(n.device); return [d ? `Enviar: ${d.device || d.name}` : "Enviar", d ? `${d.name} · ~30 ms depois` : "escolha o destino", "↗"]; }
     case "fx": { const f = FX[n.fx] || { name: n.fx, glyph: "?" }; return [f.name, f.unit !== undefined ? `${n.value} ${f.unit}`.trim() : f.hint || "bloco nativo", f.glyph]; }
     case "rack": {
       const names = (n.plugins || []).map((i) => doc().plugins[i]).filter(Boolean).map((p) => (p.enabled ? "" : "⏻") + plName(p));
@@ -283,6 +285,12 @@ function flPanel() {
         <select id="fl-send-dev">${outs.map((d) => `<option value="${d.id}"${d.id === n.device ? " selected" : ""}>${esc(`${d.name} (${d.device})`)}</option>`).join("")}</select></div>
         <p class="desc">O som que chega aqui também toca nesse dispositivo, convertido para o formato dele. Fica uns 30 ms atrás do principal.</p>`;
     }
+    if (n.kind === "tomic") {
+      const mics = PL.devices.filter((d) => d.kind === "Microfone" && d.id !== owner());
+      h += `<div class="field"><div class="flabel"><span>Microfone de destino</span></div>
+        <select id="fl-tomic-dev">${mics.map((d) => `<option value="${d.id}"${d.id === n.device ? " selected" : ""}>${esc(`${d.name} (${d.device})`)}</option>`).join("")}</select></div>
+        <p class="desc">O som que chega nesta caixa é somado à voz desse microfone: qualquer programa que grava dele (Discord, OBS, jogo) recebe os dois juntos. O microfone precisa estar com o motor instalado (Configurações). Para o volume, clique na seta que entra aqui.</p>`;
+    }
     if (n.kind === "app") {
       h += `<div class="field"><div class="flabel"><span>Programa (.exe)</span></div>
         <input type="text" id="fl-app-exe" value="${esc(n.exe || "")}" list="fl-app-list">
@@ -308,7 +316,7 @@ function flPanel() {
       } else if (f) h += `<p class="desc">${esc(f.desc)}</p>`;
     }
     const ins = g.edges.map((e, i) => [e, i]).filter(([e]) => e.to === n.id);
-    if (ins.length && ["mixer", "output", "send"].includes(n.kind)) {
+    if (ins.length && ["mixer", "output", "send", "tomic"].includes(n.kind)) {
       h += `<div class="flabel" style="margin-top:6px"><span>Mesa de som</span><span class="desc" style="margin:0">${ins.length} entrada${ins.length > 1 ? "s" : ""}</span></div>
         <div class="mx">${ins.map(([e, i]) => mixStrip(g, e, i)).join("")}</div>`;
     }
@@ -337,6 +345,7 @@ function flPanel() {
     $("#fl-toggle")?.addEventListener("click", () => { const p = doc().plugins[n.plugin]; p.enabled = !p.enabled; flChanged(); flPanel(); });
     $("#fl-del-node")?.addEventListener("click", () => flRemoveNode(n));
     $("#fl-send-dev")?.addEventListener("change", (e) => { n.device = e.target.value; flChanged(); });
+    $("#fl-tomic-dev")?.addEventListener("change", (e) => { n.device = e.target.value; flChanged(); });
     $("#fl-recv-dev")?.addEventListener("change", (e) => { n.device = e.target.value; flChanged(); });
     $("#fl-listen-dev")?.addEventListener("change", (e) => { n.device = e.target.value; flChanged(); });
     $("#fl-app-exe")?.addEventListener("change", (e) => { n.exe = e.target.value.trim().toLowerCase(); flChanged(); });
@@ -423,8 +432,8 @@ function catalogItems() {
       ...(onMic ? [{ k: "app", ic: "▶", t: "Som de um programa no microfone…", d: "Ex.: um player, o navegador ou um jogo — escolha o .exe", node: { kind: "app", exe: "" } }] : []),
       ...FL.apps.map((a) => ({ k: "app", ic: "▶", t: a, d: "Som só deste programa (tocando agora)", node: { kind: "app", exe: a } })),
       { k: "app", ic: "▶", t: "Capturar programa…", d: "Escolha o .exe depois", node: { kind: "app", exe: "" } },
-      ...ins.map((d) => ({ k: "app", ic: "🎙", t: d.name, d: `Receber de ${d.device}`, node: { kind: "receive", device: d.id } })),
-      ...outs.map((d) => ({ k: "app", ic: "👂", t: `Ouvir: ${d.name}`, d: "Tudo o que toca nesta saída", node: { kind: "listen", device: d.id } })),
+      ...ins.map((d) => ({ k: "app", ic: "🎙", t: d.device || d.name, d: `Receber de: ${d.name}`, node: { kind: "receive", device: d.id } })),
+      ...outs.map((d) => ({ k: "app", ic: "👂", t: `Ouvir: ${d.device || d.name}`, d: `${d.name} · tudo o que toca nesta saída`, node: { kind: "listen", device: d.id } })),
     ]],
     ["Efeitos nativos", Object.entries(FX).map(([id, f]) => ({ k: "fx", ic: f.glyph, t: f.name, d: f.desc, node: { kind: "fx", fx: id, value: f.def ?? 0 } }))],
     ["Plugins", [
@@ -438,7 +447,9 @@ function catalogItems() {
       : PL.found.map((f) => f.supported === false
         ? { k: "plugin", ic: "✦", t: f.name || baseName(f.path), d: `${f.format} 32 bits — ainda não suportado`, node: null }
         : { k: "plugin", ic: "✦", t: f.name || baseName(f.path), d: `plugin ${f.format || "VST3"}`, plugin: f.path })],
-    ["Saídas", outs.map((d) => ({ k: "send", ic: "↗", t: `Enviar: ${d.name}`, d: d.device, node: { kind: "send", device: d.id } }))],
+    ["Saídas", outs.map((d) => ({ k: "send", ic: "↗", t: `Enviar: ${d.device || d.name}`, d: d.name, node: { kind: "send", device: d.id } }))],
+    ["Mandar para o microfone", PL.devices.filter((d) => d.kind === "Microfone" && d.id !== owner())
+      .map((d) => ({ k: "send", ic: "🎙", t: `Para o mic: ${d.device || d.name}`, d: `${d.name} · o Discord recebe junto com a voz`, node: { kind: "tomic", device: d.id } }))],
     ["Utilitários", [{ k: "mixer", ic: "Σ", t: "Mixer", d: "Soma vários caminhos", node: { kind: "mixer" } }]],
   ];
 }
@@ -742,7 +753,7 @@ function flSideRender() {
   $("#fl-side-dev").innerHTML = PL.devices
     .map((d) => `<button class="fl-row${FL.mode === "device" && d.id === PL.device ? " active" : ""}" data-dev="${d.id}">
       <span class="dot${d.apo && d.connected !== false ? " on" : ""}" title="${d.apo ? "motor ativo" : "sem motor"}"></span>
-      <span class="t">${esc(d.name)}<small>${esc(d.kind)}</small></span></button>`)
+      <span class="t">${esc(d.device || d.name)}<small>${esc(d.kind)} · ${esc(d.name)}</small></span></button>`)
     .join("");
   const cur = FL.flows.map((f) => (FL.mode === "flow" && f.id === FL.flowId && FL.flow ? { ...f, name: FL.flow.name, enabled: FL.flow.enabled } : f));
   $("#fl-side-flows").innerHTML = cur.length
@@ -769,7 +780,7 @@ function flHeader() {
     invoke("audio_apps").then((a) => ($("#fl-when-list").innerHTML = a.map((x) => `<option value="${esc(x)}">`).join(""))).catch(() => {});
   } else {
     const d = PL.devices.find((x) => x.id === PL.device);
-    $("#fl-title").textContent = d ? `${d.kind}: ${d.name}` : "Fluxo de áudio";
+    $("#fl-title").textContent = d ? `${d.kind}: ${devFull(d)}` : "Fluxo de áudio";
   }
 }
 

@@ -21,6 +21,7 @@ mod stats;
 mod vst2;
 mod clap;
 mod bridge32;
+mod bus;
 
 use chain::{chains_dir, root_dir, AudioChain, ChainConfig, Loaded};
 use std::collections::HashMap;
@@ -97,7 +98,8 @@ impl Device {
         log(&format!("{}: conectado ao APO", self.endpoint));
         self.channel = Some(c.clone());
         let (slot, stop, timing) = (self.slot.clone(), self.stop.clone(), self.timing.clone());
-        std::thread::spawn(move || audio_thread(c, slot, stop, timing));
+        let ep = self.endpoint.clone();
+        std::thread::spawn(move || audio_thread(c, slot, stop, timing, ep));
     }
 
     fn close_windows(&mut self) {
@@ -195,6 +197,7 @@ pub struct Io {
 /// enviar para o próprio dispositivo, para quem envia de volta, ou para uma saída que o fluxo ouve.
 pub fn build_io(owner: &str, g: Option<&graph::Graph>, sr: u32) -> Io {
     let mut io = Io { producers: HashMap::new(), consumers: HashMap::new(), senders: vec![], captures: vec![] };
+    bus::detach(owner);
     let Some(g) = g else { return io };
     let listened: Vec<String> = g
         .nodes
@@ -213,6 +216,15 @@ pub fn build_io(owner: &str, g: Option<&graph::Graph>, sr: u32) -> Io {
                 log(&format!("{owner}: enviando para {dev}"));
                 io.producers.insert(n.id.clone(), prod);
                 io.senders.push(s);
+            }
+            graph::NodeKind::Tomic { device } => {
+                let mic = device.to_lowercase();
+                if mic == owner {
+                    log(&format!("{owner}: mandar para o próprio microfone recusado (viraria eco)"));
+                    continue;
+                }
+                log(&format!("{owner}: mandando para o microfone {mic}"));
+                io.producers.insert(n.id.clone(), bus::attach(&mic, owner, &n.id));
             }
             graph::NodeKind::App { exe } if !exe.is_empty() => {
                 let (cons, c) = capture::Capture::start(capture::Source::App(exe.clone()), sr, log);
@@ -257,7 +269,7 @@ fn sends_back(from: &str, to: &str) -> bool {
     false
 }
 
-fn audio_thread(ch: Arc<sr_ipc::Channel>, slot: Slot, stop: Arc<AtomicBool>, timing: Arc<stats::Timing>) {
+fn audio_thread(ch: Arc<sr_ipc::Channel>, slot: Slot, stop: Arc<AtomicBool>, timing: Arc<stats::Timing>, endpoint: String) {
     let mut chain: Option<AudioChain> = None;
     while !stop.load(Ordering::SeqCst) {
         if let Ok(mut s) = slot.try_lock() {
@@ -271,6 +283,8 @@ fn audio_thread(ch: Arc<sr_ipc::Channel>, slot: Slot, stop: Arc<AtomicBool>, tim
                 let frames = audio.len() / (chs as usize).max(1);
                 timing.measure(frames, sr as f64, || c.process(audio, chs as usize));
             }
+            // som mandado por outros fluxos para este microfone ("Mandar para o microfone")
+            bus::mix_into(&endpoint, audio, chs as usize);
         });
     }
 }
@@ -345,6 +359,14 @@ fn run() {
                         present.push(ep.clone());
                         devices.entry(ep.clone()).or_insert_with(|| Device::new(ep, p));
                     }
+                }
+            }
+            // microfone que recebe envio precisa ser atendido mesmo sem fluxo próprio
+            for ep in bus::targets() {
+                if !present.contains(&ep) {
+                    let p = dir.join(format!("{ep}.json"));
+                    devices.entry(ep.clone()).or_insert_with(|| Device::new(ep.clone(), p));
+                    present.push(ep);
                 }
             }
             devices.retain(|ep, _| present.contains(ep));
