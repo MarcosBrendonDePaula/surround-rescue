@@ -50,12 +50,14 @@ pub fn state_file(endpoint: &str, index: usize, path: &Path) -> PathBuf {
 
 pub type Shared = Arc<Mutex<Plugin>>;
 pub type Shared2 = Arc<Mutex<crate::vst2::Vst2>>;
+pub type SharedClap = Arc<Mutex<crate::clap::Clap>>;
 
 /// Um plugin carregado de qualquer formato suportado.
 #[derive(Clone)]
 pub enum Any {
     Vst3(Shared),
     Vst2(Shared2),
+    Clap(SharedClap),
 }
 
 /// Plugin carregado, com o índice dele na lista do arquivo (para abrir a janela certa).
@@ -74,6 +76,7 @@ fn is_vst2_path(p: &Path) -> bool {
 pub enum Window {
     Vst3(vst3_host::window::PluginWindow),
     Vst2(crate::vst2::Vst2Window, Shared2),
+    Clap(crate::vst2::Vst2Window, SharedClap),
 }
 
 impl Window {
@@ -85,8 +88,12 @@ impl Window {
                 Ok(Window::Vst3(w))
             }
             Any::Vst2(p) => {
-                let w = crate::vst2::Vst2Window::open(&mut p.lock().unwrap())?;
+                let w = crate::vst2::Vst2Window::open(&mut *p.lock().unwrap())?;
                 Ok(Window::Vst2(w, p.clone()))
+            }
+            Any::Clap(p) => {
+                let w = crate::vst2::Vst2Window::open(&mut *p.lock().unwrap())?;
+                Ok(Window::Clap(w, p.clone()))
             }
         }
     }
@@ -95,6 +102,7 @@ impl Window {
         match self {
             Window::Vst3(w) => w.is_open() && !w.closed_by_user(),
             Window::Vst2(w, _) => !w.closed(),
+            Window::Clap(w, _) => !w.closed(),
         }
     }
 
@@ -106,7 +114,12 @@ impl Window {
             }
             Window::Vst2(w, p) => {
                 if let Ok(mut g) = p.try_lock() {
-                    w.idle(&mut g);
+                    w.idle(&mut *g);
+                }
+            }
+            Window::Clap(w, p) => {
+                if let Ok(mut g) = p.try_lock() {
+                    w.idle(&mut *g);
                 }
             }
         }
@@ -117,7 +130,12 @@ impl Window {
             Window::Vst3(w) => w.close(),
             Window::Vst2(w, p) => {
                 if let Ok(mut g) = p.lock() {
-                    w.close(&mut g);
+                    w.close(&mut *g);
+                }
+            }
+            Window::Clap(w, p) => {
+                if let Ok(mut g) = p.lock() {
+                    w.close(&mut *g);
                 }
             }
         }
@@ -131,6 +149,19 @@ const MAX_FRAMES: usize = 19_200;
 pub fn load(endpoint: &str, cfg: &ChainConfig, sample_rate: f64, log: &dyn Fn(&str)) -> Vec<Loaded> {
     let mut out = vec![];
     for (index, e) in cfg.plugins.iter().enumerate().filter(|(_, e)| e.enabled) {
+        if e.path.extension().map(|x| x.eq_ignore_ascii_case("clap")).unwrap_or(false) {
+            match crate::clap::Clap::load(&e.path, sample_rate, PLUGIN_BLOCK) {
+                Ok(mut p) => {
+                    if let Ok(st) = std::fs::read(state_file(endpoint, index, &e.path)) {
+                        p.load_state(&st);
+                    }
+                    log(&format!("plugin CLAP carregado: {} ({})", p.name, e.path.display()));
+                    out.push(Loaded { index, path: e.path.clone(), plugin: Any::Clap(Arc::new(Mutex::new(p))) });
+                }
+                Err(err) => log(&format!("plugin CLAP falhou: {} — {err}", e.path.display())),
+            }
+            continue;
+        }
         if is_vst2_path(&e.path) {
             match crate::vst2::Vst2::load(&e.path, sample_rate, PLUGIN_BLOCK) {
                 Ok(mut p) => {
@@ -177,6 +208,10 @@ pub fn save_states(endpoint: &str, loaded: &[Loaded], log: &dyn Fn(&str)) {
                 Ok(p) => Ok(p.save_state()),
                 Err(_) => continue,
             },
+            Any::Clap(p) => match p.lock() {
+                Ok(p) => Ok(p.save_state()),
+                Err(_) => continue,
+            },
         };
         match saved {
             Ok(bytes) => {
@@ -219,6 +254,11 @@ impl crate::graph::Processor for NodeProcs {
         let p = match self.plugins.get(node) {
             Some(Some(Any::Vst2(p))) => {
                 // janela usando o plugin agora? pula este plugin neste bloco (o som segue)
+                let Ok(mut g) = p.try_lock() else { return false };
+                g.process(l, r);
+                return true;
+            }
+            Some(Some(Any::Clap(p))) => {
                 let Ok(mut g) = p.try_lock() else { return false };
                 g.process(l, r);
                 return true;

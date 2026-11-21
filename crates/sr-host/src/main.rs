@@ -19,6 +19,7 @@ mod capture;
 mod flows;
 mod stats;
 mod vst2;
+mod clap;
 
 use chain::{chains_dir, root_dir, AudioChain, ChainConfig, Loaded};
 use std::collections::HashMap;
@@ -454,6 +455,38 @@ fn scan(extra: &[String]) {
         out.push(serde_json::json!({ "path": p, "name": name, "format": "VST3", "bits": 64, "supported": true,
             "vendor": vendor, "category": categorize(&raw, name.as_deref().unwrap_or("")) }));
     }
+    // CLAP: pastas padrão + extras
+    let mut dirsc: Vec<PathBuf> = vec![PathBuf::from(r"C:\Program Files\Common Files\CLAP")];
+    if let Ok(l) = std::env::var("LOCALAPPDATA") {
+        dirsc.push(PathBuf::from(l).join(r"Programs\Common\CLAP"));
+    }
+    dirsc.extend(extra.iter().map(PathBuf::from));
+    fn walk_clap(d: &Path, depth: u32, out: &mut Vec<PathBuf>) {
+        let Ok(rd) = std::fs::read_dir(d) else { return };
+        for e in rd.flatten() {
+            let p = e.path();
+            if p.is_file() && p.extension().map(|x| x.eq_ignore_ascii_case("clap")).unwrap_or(false) {
+                out.push(p);
+            } else if p.is_dir() && depth < 3 {
+                walk_clap(&p, depth + 1, out);
+            }
+        }
+    }
+    let mut claps = vec![];
+    for d in &dirsc {
+        walk_clap(d, 0, &mut claps);
+    }
+    claps.sort();
+    claps.dedup();
+    for p in claps {
+        let stem = p.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+        if vst2::pe_bits(&p) == Some(32) {
+            out.push(serde_json::json!({ "path": p, "name": stem, "format": "CLAP", "bits": 32, "supported": false, "vendor": "", "category": categorize("", &stem) }));
+        } else if let Some((n, vendor, feats)) = clap::probe(&p) {
+            let nm = if n.is_empty() { stem } else { n };
+            out.push(serde_json::json!({ "path": p, "name": nm, "format": "CLAP", "bits": 64, "supported": true, "vendor": vendor, "category": categorize(&feats, &nm) }));
+        }
+    }
     // VST2: pastas comuns + a registrada pelos instaladores + as extras
     let mut dirs2: Vec<PathBuf> = [
         r"C:\Program Files\VSTPlugins",
@@ -529,6 +562,7 @@ fn test_plugin(path: &str) {
     let editor = match &loaded[0].plugin {
         chain::Any::Vst3(p) => p.lock().map(|p| p.has_editor()).unwrap_or(false),
         chain::Any::Vst2(p) => p.lock().map(|p| p.has_editor()).unwrap_or(false),
+        chain::Any::Clap(p) => p.lock().map(|p| p.has_editor()).unwrap_or(false),
     };
     let mut c = AudioChain::new(&loaded, &cfg, 48000.0, HashMap::new(), HashMap::new(), &|m| println!("{m}"));
     let mut audio: Vec<f32> = (0..48000 * 2).map(|i| ((i / 2) as f32 * 2.0 * std::f32::consts::PI * 440.0 / 48000.0).sin() * 0.5).collect();
