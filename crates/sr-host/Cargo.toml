@@ -1,0 +1,15 @@
+[package]
+name = "sr-host"
+version = "0.1.0"
+edition = "2021"
+description = "Executor de VST3 do Surround Rescue: roda a cadeia de plugins de cada dispositivo para o APO"
+
+[[bin]]
+name = "sr-host"
+path = "src/main.rs"
+
+[dependencies]
+sr-ipc = { path = "../sr-ipc" }
+vst3-host = { version = "0.11.1", default-features = false }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

@@ -10,6 +10,8 @@ use std::time::{Duration, SystemTime};
 #[derive(Default)]
 struct Mailbox {
     pending: Mutex<Option<EngineConfig>>,
+    /// Canal com o executor de VST, aberto pela thread comum quando o executor aparece
+    host: Mutex<Option<sr_ipc::Channel>>,
     stop: AtomicBool,
 }
 
@@ -20,6 +22,7 @@ pub struct Engine {
     mic: [MicProcessor; 2],
     is_mic: bool,
     box_: Arc<Mailbox>,
+    host: Option<sr_ipc::Channel>,
 }
 
 impl Engine {
@@ -33,6 +36,7 @@ impl Engine {
             mic: [MicProcessor::new(sr), MicProcessor::new(sr)],
             is_mic: capture,
             box_: box_.clone(),
+            host: None,
         };
         // até chegar a configuração: passa direto
         e.out.set(&sr_dsp::Settings { enabled: false, ..Default::default() });
@@ -48,7 +52,7 @@ impl Engine {
             if let Some(c) = std::fs::read_to_string(&path).ok().and_then(|t| config::parse(&t)) {
                 e.apply(&c);
             }
-            std::thread::spawn(move || watch(path, box_));
+            std::thread::spawn(move || watch(path, ep, box_));
         }
         e
     }
@@ -82,6 +86,16 @@ impl Engine {
             self.apply(&c);
             // `c` só tem String vazia (realtime_safe): o drop não libera heap
         }
+        if self.host.is_none() {
+            if let Ok(mut h) = self.box_.host.try_lock() {
+                self.host = h.take();
+            }
+        }
+        // 1) cadeia de VSTs no executor (prazo de 4 ms; atrasou = passa direto)
+        if let Some(h) = &self.host {
+            h.process(buf, self.sr as u32, self.channels as u32, 4);
+        }
+        // 2) Surround Rescue + limitador sempre por último
         if self.is_mic {
             let ch = self.channels;
             if ch == 1 {
@@ -109,8 +123,17 @@ impl Drop for Engine {
 }
 
 /// Thread comum: confere o arquivo 4x por segundo e manda a configuração nova.
-fn watch(path: std::path::PathBuf, mb: Arc<Mailbox>) {
+fn watch(path: std::path::PathBuf, endpoint: String, mb: Arc<Mailbox>) {
     let mut last: Option<SystemTime> = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
+    // O APO (serviço) cria o canal; o executor de VST conecta quando quiser.
+    // Enquanto não houver executor vivo, o tempo real nem espera (batimento ausente).
+    match sr_ipc::Channel::create(&endpoint) {
+        Ok(c) => {
+            crate::log(&format!("canal para VSTs criado em {endpoint}"));
+            *mb.host.lock().unwrap() = Some(c);
+        }
+        Err(e) => crate::log(&format!("canal para VSTs falhou em {endpoint}: {e}")),
+    }
     while !mb.stop.load(Ordering::SeqCst) {
         std::thread::sleep(Duration::from_millis(250));
         let now = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
