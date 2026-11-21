@@ -49,12 +49,79 @@ pub fn state_file(endpoint: &str, index: usize, path: &Path) -> PathBuf {
 }
 
 pub type Shared = Arc<Mutex<Plugin>>;
+pub type Shared2 = Arc<Mutex<crate::vst2::Vst2>>;
+
+/// Um plugin carregado de qualquer formato suportado.
+#[derive(Clone)]
+pub enum Any {
+    Vst3(Shared),
+    Vst2(Shared2),
+}
 
 /// Plugin carregado, com o índice dele na lista do arquivo (para abrir a janela certa).
 pub struct Loaded {
     pub index: usize,
     pub path: PathBuf,
-    pub plugin: Shared,
+    pub plugin: Any,
+}
+
+/// Formato pelo arquivo: `.vst3` = VST3; `.dll` = VST2.
+fn is_vst2_path(p: &Path) -> bool {
+    p.extension().map(|e| e.eq_ignore_ascii_case("dll")).unwrap_or(false)
+}
+
+/// Janela aberta de um plugin (VST3 pela biblioteca; VST2 por janela própria).
+pub enum Window {
+    Vst3(vst3_host::window::PluginWindow),
+    Vst2(crate::vst2::Vst2Window, Shared2),
+}
+
+impl Window {
+    pub fn open(l: &Loaded) -> Result<Window, String> {
+        match &l.plugin {
+            Any::Vst3(p) => {
+                let mut w = vst3_host::window::PluginWindow::new(p.clone());
+                w.open().map_err(|e| e.to_string())?;
+                Ok(Window::Vst3(w))
+            }
+            Any::Vst2(p) => {
+                let w = crate::vst2::Vst2Window::open(&mut p.lock().unwrap())?;
+                Ok(Window::Vst2(w, p.clone()))
+            }
+        }
+    }
+
+    pub fn is_open(&self) -> bool {
+        match self {
+            Window::Vst3(w) => w.is_open() && !w.closed_by_user(),
+            Window::Vst2(w, _) => !w.closed(),
+        }
+    }
+
+    /// Mensagens/redesenho (chamado ~60 vezes por segundo pela thread da interface).
+    pub fn service(&self) {
+        match self {
+            Window::Vst3(w) => {
+                let _ = w.service_platform_events();
+            }
+            Window::Vst2(w, p) => {
+                if let Ok(mut g) = p.try_lock() {
+                    w.idle(&mut g);
+                }
+            }
+        }
+    }
+
+    pub fn close(&mut self) {
+        match self {
+            Window::Vst3(w) => w.close(),
+            Window::Vst2(w, p) => {
+                if let Ok(mut g) = p.lock() {
+                    w.close(&mut g);
+                }
+            }
+        }
+    }
 }
 
 const PLUGIN_BLOCK: usize = 1024;
@@ -64,6 +131,19 @@ const MAX_FRAMES: usize = 19_200;
 pub fn load(endpoint: &str, cfg: &ChainConfig, sample_rate: f64, log: &dyn Fn(&str)) -> Vec<Loaded> {
     let mut out = vec![];
     for (index, e) in cfg.plugins.iter().enumerate().filter(|(_, e)| e.enabled) {
+        if is_vst2_path(&e.path) {
+            match crate::vst2::Vst2::load(&e.path, sample_rate, PLUGIN_BLOCK) {
+                Ok(mut p) => {
+                    if let Ok(st) = std::fs::read(state_file(endpoint, index, &e.path)) {
+                        p.load_state(&st);
+                    }
+                    log(&format!("plugin VST2 carregado: {} ({})", p.name, e.path.display()));
+                    out.push(Loaded { index, path: e.path.clone(), plugin: Any::Vst2(Arc::new(Mutex::new(p))) });
+                }
+                Err(err) => log(&format!("plugin VST2 falhou: {} — {err}", e.path.display())),
+            }
+            continue;
+        }
         let r = (|| -> vst3_host::Result<Plugin> {
             let mut p = vst3_host::simple::load_plugin_with_settings(&e.path, sample_rate, PLUGIN_BLOCK)?;
             if let Ok(st) = std::fs::read(state_file(endpoint, index, &e.path)) {
@@ -77,7 +157,7 @@ pub fn load(endpoint: &str, cfg: &ChainConfig, sample_rate: f64, log: &dyn Fn(&s
         match r {
             Ok(p) => {
                 log(&format!("plugin carregado: {} ({})", p.info().name, e.path.display()));
-                out.push(Loaded { index, path: e.path.clone(), plugin: Arc::new(Mutex::new(p)) });
+                out.push(Loaded { index, path: e.path.clone(), plugin: Any::Vst3(Arc::new(Mutex::new(p))) });
             }
             Err(err) => log(&format!("plugin falhou: {} — {err}", e.path.display())),
         }
@@ -88,8 +168,17 @@ pub fn load(endpoint: &str, cfg: &ChainConfig, sample_rate: f64, log: &dyn Fn(&s
 /// Salva o estado (ajustes) de cada plugin.
 pub fn save_states(endpoint: &str, loaded: &[Loaded], log: &dyn Fn(&str)) {
     for l in loaded {
-        let Ok(p) = l.plugin.lock() else { continue };
-        match p.save_state() {
+        let saved = match &l.plugin {
+            Any::Vst3(p) => match p.lock() {
+                Ok(p) => p.save_state().map_err(|e| e.to_string()),
+                Err(_) => continue,
+            },
+            Any::Vst2(p) => match p.lock() {
+                Ok(p) => Ok(p.save_state()),
+                Err(_) => continue,
+            },
+        };
+        match saved {
             Ok(bytes) => {
                 let f = state_file(endpoint, l.index, &l.path);
                 let _ = std::fs::create_dir_all(f.parent().unwrap());
@@ -104,7 +193,7 @@ pub fn save_states(endpoint: &str, loaded: &[Loaded], log: &dyn Fn(&str)) {
 
 /// Liga os nós do fluxo aos plugins carregados.
 struct NodeProcs {
-    plugins: Vec<Option<Shared>>,
+    plugins: Vec<Option<Any>>,
     blocks: Vec<Option<crate::blocks::Block>>,
     /// Entradas externas (programa / dispositivo) por nó
     sources: Vec<Option<sr_bridge::ring::Consumer>>,
@@ -127,8 +216,16 @@ impl crate::graph::Processor for NodeProcs {
             b.process(l, r);
             return true;
         }
-        let Some(Some(p)) = self.plugins.get(node) else { return false };
-        // janela usando o plugin agora? pula este plugin neste bloco (o som segue)
+        let p = match self.plugins.get(node) {
+            Some(Some(Any::Vst2(p))) => {
+                // janela usando o plugin agora? pula este plugin neste bloco (o som segue)
+                let Ok(mut g) = p.try_lock() else { return false };
+                g.process(l, r);
+                return true;
+            }
+            Some(Some(Any::Vst3(p))) => p.clone(),
+            _ => return false,
+        };
         let Ok(mut g) = p.try_lock() else { return false };
         let frames = l.len();
         self.ab.block_size = frames;

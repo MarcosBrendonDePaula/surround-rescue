@@ -157,8 +157,8 @@ fn preview(state: State<AppState>) -> String {
 }
 
 #[tauri::command]
-async fn scan_plugins() -> Result<Vec<plugins::Found>, String> {
-    tauri::async_runtime::spawn_blocking(plugins::scan).await.map_err(|e| e.to_string())?
+async fn scan_plugins(extra: Option<Vec<String>>) -> Result<Vec<plugins::Found>, String> {
+    tauri::async_runtime::spawn_blocking(move || plugins::scan(extra.unwrap_or_default())).await.map_err(|e| e.to_string())?
 }
 
 #[tauri::command]

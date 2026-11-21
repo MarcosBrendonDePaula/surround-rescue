@@ -18,6 +18,7 @@ mod blocks;
 mod capture;
 mod flows;
 mod stats;
+mod vst2;
 
 use chain::{chains_dir, root_dir, AudioChain, ChainConfig, Loaded};
 use std::collections::HashMap;
@@ -25,7 +26,6 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
-use vst3_host::window::PluginWindow;
 
 pub fn log(msg: &str) {
     use std::io::Write;
@@ -56,7 +56,7 @@ struct Device {
     channel: Option<Arc<sr_ipc::Channel>>,
     loaded: Vec<Loaded>,
     loaded_sr: u32,
-    windows: HashMap<usize, PluginWindow>,
+    windows: HashMap<usize, chain::Window>,
     /// Envios para outros dispositivos (mantêm as threads de saída vivas)
     senders: Vec<send::Sender>,
     /// Capturas de programas/dispositivos (mantêm as threads de entrada vivas)
@@ -143,9 +143,8 @@ impl Device {
         if self.windows.get(&index).map(|w| w.is_open()).unwrap_or(false) {
             return; // já aberta
         }
-        let mut w = PluginWindow::new(l.plugin.clone());
-        match w.open() {
-            Ok(()) => {
+        match chain::Window::open(l) {
+            Ok(w) => {
                 log(&format!("{}: janela aberta ({})", self.endpoint, l.path.display()));
                 self.windows.insert(index, w);
             }
@@ -157,8 +156,8 @@ impl Device {
     fn service_windows(&mut self) {
         let mut closed = vec![];
         for (i, w) in self.windows.iter() {
-            let _ = w.service_platform_events();
-            if !w.is_open() || w.closed_by_user() {
+            w.service();
+            if !w.is_open() {
                 closed.push(*i);
             }
         }
@@ -404,14 +403,69 @@ fn run() {
     }
 }
 
-fn scan() {
-    let mut dirs = vst3_host::discovery::scan_standard_paths();
+/// Lista plugins VST3 e VST2 (64 e 32 bits) nas pastas padrão e nas `extra` (JSON para o app).
+fn scan(extra: &[String]) {
+    let mut out: Vec<serde_json::Value> = vec![];
+    // VST3
+    let mut dirs3 = vst3_host::discovery::scan_standard_paths();
     if let Ok(l) = std::env::var("LOCALAPPDATA") {
-        dirs.push(PathBuf::from(l).join(r"Programs\Common\VST3"));
+        dirs3.push(PathBuf::from(l).join(r"Programs\Common\VST3"));
     }
-    let found = vst3_host::discovery::scan_directories(&dirs).unwrap_or_default();
-    let list: Vec<_> = found.iter().map(|p| serde_json::json!({ "path": p, "name": p.file_stem().map(|s| s.to_string_lossy().to_string()) })).collect();
-    println!("{}", serde_json::to_string_pretty(&list).unwrap());
+    dirs3.extend(extra.iter().map(PathBuf::from));
+    for p in vst3_host::discovery::scan_directories(&dirs3).unwrap_or_default() {
+        out.push(serde_json::json!({ "path": p, "name": p.file_stem().map(|s| s.to_string_lossy().to_string()), "format": "VST3", "bits": 64, "supported": true }));
+    }
+    // VST2: pastas comuns + a registrada pelos instaladores + as extras
+    let mut dirs2: Vec<PathBuf> = [
+        r"C:\Program Files\VSTPlugins",
+        r"C:\Program Files\Steinberg\VSTPlugins",
+        r"C:\Program Files\Common Files\VST2",
+        r"C:\Program Files\Common Files\Steinberg\VST2",
+        r"C:\Program Files (x86)\VSTPlugins",
+        r"C:\Program Files (x86)\Steinberg\VSTPlugins",
+        r"C:\Program Files (x86)\Common Files\VST2",
+    ]
+    .iter()
+    .map(PathBuf::from)
+    .collect();
+    for key in [r"SOFTWARE\VST", r"SOFTWARE\WOW6432Node\VST"] {
+        if let Ok(v) = std::process::Command::new("reg").args(["query", &format!(r"HKLM\{key}"), "/v", "VSTPluginsPath"]).output() {
+            let t = String::from_utf8_lossy(&v.stdout);
+            if let Some(path) = t.lines().find_map(|l| l.split("REG_SZ").nth(1)).map(|x| x.trim().to_string()) {
+                dirs2.push(PathBuf::from(path));
+            }
+        }
+    }
+    dirs2.extend(extra.iter().map(PathBuf::from));
+    let mut seen = std::collections::HashSet::new();
+    fn walk(d: &Path, depth: u32, files: &mut Vec<PathBuf>) {
+        let Ok(rd) = std::fs::read_dir(d) else { return };
+        for e in rd.flatten() {
+            let p = e.path();
+            if p.is_dir() && depth < 3 && !p.extension().map(|x| x.eq_ignore_ascii_case("vst3")).unwrap_or(false) {
+                walk(&p, depth + 1, files);
+            } else if p.extension().map(|x| x.eq_ignore_ascii_case("dll")).unwrap_or(false) {
+                files.push(p);
+            }
+        }
+    }
+    let mut dlls = vec![];
+    for d in &dirs2 {
+        walk(d, 0, &mut dlls);
+    }
+    for p in dlls {
+        if !seen.insert(p.to_string_lossy().to_lowercase()) {
+            continue;
+        }
+        let name = p.file_stem().map(|s| s.to_string_lossy().to_string());
+        match vst2::pe_bits(&p) {
+            Some(64) if vst2::is_vst2(&p) => out.push(serde_json::json!({ "path": p, "name": name, "format": "VST2", "bits": 64, "supported": true })),
+            // 32 bits não pode ser carregado aqui; o nome no arquivo basta para avisar
+            Some(32) => out.push(serde_json::json!({ "path": p, "name": name, "format": "VST2", "bits": 32, "supported": false })),
+            _ => {}
+        }
+    }
+    println!("{}", serde_json::to_string_pretty(&out).unwrap());
 }
 
 fn test_plugin(path: &str) {
@@ -421,7 +475,10 @@ fn test_plugin(path: &str) {
         println!("FALHOU: plugin não carregou");
         std::process::exit(1);
     }
-    let editor = loaded[0].plugin.lock().map(|p| p.has_editor()).unwrap_or(false);
+    let editor = match &loaded[0].plugin {
+        chain::Any::Vst3(p) => p.lock().map(|p| p.has_editor()).unwrap_or(false),
+        chain::Any::Vst2(p) => p.lock().map(|p| p.has_editor()).unwrap_or(false),
+    };
     let mut c = AudioChain::new(&loaded, &cfg, 48000.0, HashMap::new(), HashMap::new(), &|m| println!("{m}"));
     let mut audio: Vec<f32> = (0..48000 * 2).map(|i| ((i / 2) as f32 * 2.0 * std::f32::consts::PI * 440.0 / 48000.0).sin() * 0.5).collect();
     let orig = audio.clone();
@@ -469,7 +526,7 @@ fn main() {
     match args.get(1).map(|s| s.as_str()) {
         Some("--apps") => return println!("{}", serde_json::to_string(&capture::audio_apps()).unwrap()),
         Some("--capture") => return test_capture(args.get(2).expect("informe o .exe"), args.get(3).and_then(|s| s.parse().ok()).unwrap_or(5)),
-        Some("--scan") => scan(),
+        Some("--scan") => scan(&args[2..]),
         Some("--test") => test_plugin(args.get(2).expect("informe o caminho do .vst3")),
         _ => run(),
     }

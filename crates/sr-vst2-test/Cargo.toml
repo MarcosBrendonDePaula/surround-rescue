@@ -1,0 +1,9 @@
+[package]
+name = "sr-vst2-test"
+version = "0.1.0"
+edition = "2021"
+description = "Plugin VST2 mínimo (ganho -6 dB) para testar o carregador de VST2 do executor"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]

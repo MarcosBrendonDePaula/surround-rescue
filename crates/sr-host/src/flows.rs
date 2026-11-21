@@ -16,7 +16,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::collections::HashMap;
 use std::time::{Duration, Instant, SystemTime};
-use vst3_host::window::PluginWindow;
 
 pub const RATE: u32 = 48_000;
 const BLOCK: usize = 480; // 10 ms
@@ -60,7 +59,7 @@ pub struct Flow {
     cfg: FlowFile,
     seen: Option<SystemTime>,
     pub loaded: Vec<Loaded>,
-    windows: HashMap<usize, PluginWindow>,
+    windows: HashMap<usize, chain::Window>,
     senders: Vec<send::Sender>,
     captures: Vec<capture::Capture>,
     running: bool,
@@ -161,9 +160,8 @@ impl Flow {
         if self.windows.get(&index).map(|w| w.is_open()).unwrap_or(false) {
             return;
         }
-        let mut w = PluginWindow::new(l.plugin.clone());
-        match w.open() {
-            Ok(()) => {
+        match chain::Window::open(l) {
+            Ok(w) => {
                 self.windows.insert(index, w);
             }
             Err(e) => log(&format!("fluxo {}: não abriu a janela: {e}", self.id)),
@@ -175,8 +173,8 @@ impl Flow {
             .windows
             .iter()
             .filter_map(|(i, w)| {
-                let _ = w.service_platform_events();
-                (!w.is_open() || w.closed_by_user()).then_some(*i)
+                w.service();
+                (!w.is_open()).then_some(*i)
             })
             .collect();
         if !closed.is_empty() {

@@ -155,7 +155,7 @@ function nodeInfo(n) {
     case "fx": { const f = FX[n.fx] || { name: n.fx, glyph: "?" }; return [f.name, f.unit !== undefined ? `${n.value} ${f.unit}`.trim() : f.hint || "bloco nativo", f.glyph]; }
     case "plugin": {
       const p = doc().plugins[n.plugin];
-      return [p ? baseName(p.path) : "(plugin removido)", p && !p.enabled ? "desligado" : "plugin VST3", "✦"];
+      return [p ? baseName(p.path) : "(plugin removido)", p && !p.enabled ? "desligado" : /\.dll$/i.test(p?.path || "") ? "plugin VST2" : "plugin VST3", "✦"];
     }
   }
   return [n.kind, "", "?"];
@@ -366,7 +366,7 @@ async function flOpenCreator(pending) {
   if (!PL.found.length && !FL.scanning) {
     FL.scanning = true;
     flCatalog();
-    try { PL.found = await invoke("scan_plugins"); } catch (e) { PL.found = []; }
+    try { PL.found = await invoke("scan_plugins", { extra: plDirs() }); } catch (e) { PL.found = []; }
     FL.scanning = false;
     if (!$("#fl-creator").hidden) flCatalog();
   }
@@ -386,7 +386,9 @@ function catalogItems() {
     ["Efeitos nativos", Object.entries(FX).map(([id, f]) => ({ k: "fx", ic: f.glyph, t: f.name, d: f.desc, node: { kind: "fx", fx: id, value: f.def ?? 0 } }))],
     ["Plugins VST", FL.scanning && !PL.found.length
       ? [{ k: "plugin", ic: "…", t: "Procurando plugins…", d: "só na primeira vez", node: null }]
-      : PL.found.map((f) => ({ k: "plugin", ic: "✦", t: f.name || baseName(f.path), d: "plugin VST3", plugin: f.path }))],
+      : PL.found.map((f) => f.supported === false
+        ? { k: "plugin", ic: "✦", t: f.name || baseName(f.path), d: `${f.format} 32 bits — ainda não suportado`, node: null }
+        : { k: "plugin", ic: "✦", t: f.name || baseName(f.path), d: `plugin ${f.format || "VST3"}`, plugin: f.path })],
     ["Saídas", outs.map((d) => ({ k: "send", ic: "↗", t: `Enviar: ${d.name}`, d: d.device, node: { kind: "send", device: d.id } }))],
     ["Utilitários", [{ k: "mixer", ic: "Σ", t: "Mixer", d: "Soma vários caminhos", node: { kind: "mixer" } }]],
   ];

@@ -1,5 +1,5 @@
 [workspace]
-members = ["src-tauri", "crates/sr-dsp", "crates/sr-vst", "crates/sr-apo", "crates/sr-ipc", "crates/sr-host", "crates/sr-bridge", "xtask"]
+members = ["src-tauri", "crates/sr-dsp", "crates/sr-vst", "crates/sr-apo", "crates/sr-ipc", "crates/sr-host", "crates/sr-bridge", "crates/sr-vst2-test", "xtask"]
 resolver = "2"
 
 [profile.release]

@@ -369,12 +369,17 @@ async function plLoadChain() {
   plRender();
 }
 
+// pastas de plugins escolhidas pelo usuário (lembradas neste computador)
+const plDirs = () => { try { return JSON.parse(localStorage.getItem("sr-plugin-dirs") || "[]"); } catch (e) { return []; } };
+const plAddDir = (d) => { const l = plDirs(); if (!l.includes(d)) { l.push(d); try { localStorage.setItem("sr-plugin-dirs", JSON.stringify(l)); } catch (e) {} } };
+const plLabel = (f) => `${f.name || baseName(f.path)} · ${f.format || "VST3"}${f.bits === 32 ? " 32 bits (ainda não suportado)" : ""}`;
+
 async function plScan() {
   $("#pl-found").innerHTML = `<option>Procurando plugins…</option>`;
-  try { PL.found = await invoke("scan_plugins"); } catch (e) { PL.found = []; $("#error").textContent = String(e); $("#error").hidden = false; }
+  try { PL.found = await invoke("scan_plugins", { extra: plDirs() }); } catch (e) { PL.found = []; $("#error").textContent = String(e); $("#error").hidden = false; }
   $("#pl-found").innerHTML = PL.found.length
-    ? PL.found.map((f, i) => `<option value="${i}">${esc(f.name || baseName(f.path))}</option>`).join("")
-    : `<option value="">Nenhum VST3 encontrado nas pastas padrão</option>`;
+    ? PL.found.map((f, i) => `<option value="${i}"${f.supported === false ? " disabled" : ""}>${esc(plLabel(f))}</option>`).join("")
+    : `<option value="">Nenhum plugin encontrado nas pastas padrão</option>`;
 }
 
 /// Lista só edita a estrutura quando o fluxo é uma fila simples (aí o desenho vira fila de novo).
@@ -436,7 +441,21 @@ function plBind() {
   });
   $("#pl-add-path").addEventListener("click", () => {
     const p = $("#pl-path").value.trim().replace(/^"|"$/g, "");
-    if (!/\.vst3$/i.test(p)) { $("#error").textContent = "Informe o caminho de um arquivo ou pasta .vst3."; $("#error").hidden = false; return; }
+    if (!p) return;
+    // pasta: procura plugins dentro dela (e lembra para as próximas buscas)
+    if (!/\.(vst3|dll)$/i.test(p)) {
+      plAddDir(p);
+      $("#pl-path").value = "";
+      plScan().then(() => {
+        const n = PL.found.filter((f) => String(f.path).toLowerCase().startsWith(p.toLowerCase()));
+        const ok = n.filter((f) => f.supported !== false).length;
+        $("#error").textContent = n.length
+          ? `Pasta adicionada: ${n.length} plugin(s) encontrado(s)${n.length - ok ? `, ${n.length - ok} de 32 bits (ainda não suportados)` : ""}. Escolha na lista acima.`
+          : "Nenhum plugin VST2 ou VST3 nessa pasta.";
+        $("#error").hidden = false;
+      });
+      return;
+    }
     if (!plListEdit()) return;
     PL.chain.plugins.push({ path: p, enabled: true });
     $("#pl-path").value = "";

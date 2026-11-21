@@ -29,6 +29,14 @@ pub struct Chain {
 pub struct Found {
     pub path: PathBuf,
     pub name: Option<String>,
+    /// "VST3" | "VST2"
+    #[serde(default)]
+    pub format: Option<String>,
+    #[serde(default)]
+    pub bits: Option<u32>,
+    /// false = encontrado mas ainda não carregável (ex.: 32 bits)
+    #[serde(default = "yes")]
+    pub supported: bool,
 }
 
 pub fn chains_dir() -> PathBuf {
@@ -165,9 +173,10 @@ pub fn host_exe() -> Option<PathBuf> {
     None
 }
 
-pub fn scan() -> Result<Vec<Found>, String> {
+/// Procura plugins nas pastas padrão e nas `extra` (pastas escolhidas pelo usuário).
+pub fn scan(extra: Vec<String>) -> Result<Vec<Found>, String> {
     let exe = host_exe().ok_or("Executor de VST (sr-host.exe) não encontrado.")?;
-    let out = hidden(Command::new(exe).arg("--scan")).output().map_err(|e| e.to_string())?;
+    let out = hidden(Command::new(exe).arg("--scan").args(extra.iter().filter(|d| std::path::Path::new(d).is_dir()))).output().map_err(|e| e.to_string())?;
     serde_json::from_slice(&out.stdout).map_err(|e| format!("Resposta inválida do executor: {e}"))
 }
 
