@@ -416,8 +416,11 @@ async function flOpenCreator(pending) {
 function catalogItems() {
   const outs = PL.devices.filter((d) => d.kind === "Saída" && d.id !== owner());
   const ins = PL.devices.filter((d) => d.kind === "Microfone" && d.id !== owner());
+  // fluxo de um microfone: as entradas são o que vai ser misturado na voz (o Discord recebe junto)
+  const onMic = devName(owner())?.kind === "Microfone";
   return [
-    ["Entradas", [
+    [onMic ? "Tocar no microfone (o Discord e os outros programas recebem junto com a sua voz)" : "Entradas", [
+      ...(onMic ? [{ k: "app", ic: "▶", t: "Som de um programa no microfone…", d: "Ex.: um player, o navegador ou um jogo — escolha o .exe", node: { kind: "app", exe: "" } }] : []),
       ...FL.apps.map((a) => ({ k: "app", ic: "▶", t: a, d: "Som só deste programa (tocando agora)", node: { kind: "app", exe: a } })),
       { k: "app", ic: "▶", t: "Capturar programa…", d: "Escolha o .exe depois", node: { kind: "app", exe: "" } },
       ...ins.map((d) => ({ k: "app", ic: "🎙", t: d.name, d: `Receber de ${d.device}`, node: { kind: "receive", device: d.id } })),
@@ -493,6 +496,10 @@ function flCreate(it) {
     const r = $("#fl-canvas").getBoundingClientRect(), v = FL.view;
     Object.assign(node, { x: Math.round((r.width / 2 - v.x) / v.z - W / 2), y: Math.round((r.height / 2 - v.y) / v.z - H / 2) });
     g.nodes.push(node);
+  }
+  // entrada nova (programa, outro microfone, ouvir saída) já sai ligada na Saída deste dispositivo
+  if (["app", "receive", "listen"].includes(node.kind) && g.nodes.some((x) => x.id === "out") && !g.edges.some((e) => e.from === node.id)) {
+    g.edges.push({ from: node.id, to: "out", gain: 1 });
   }
   if (hasCycle(g)) {
     g.nodes.pop();
