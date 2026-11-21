@@ -434,10 +434,9 @@ function catalogItems() {
   // fluxo de um microfone: as entradas são o que vai ser misturado na voz (o Discord recebe junto)
   const onMic = devName(owner())?.kind === "Microfone";
   return [
-    [onMic ? "Tocar no microfone (o Discord e os outros programas recebem junto com a sua voz)" : "Entradas", [
-      ...(onMic ? [{ k: "app", ic: "▶", t: "Som de um programa no microfone…", d: "Ex.: um player, o navegador ou um jogo — escolha o .exe", node: { kind: "app", exe: "" } }] : []),
+    [onMic ? "Misturar na voz" : "Entradas", [
       ...FL.apps.map((a) => ({ k: "app", ic: "▶", t: a, d: "Som só deste programa (tocando agora)", node: { kind: "app", exe: a } })),
-      { k: "app", ic: "▶", t: "Capturar programa…", d: "Escolha o .exe depois", node: { kind: "app", exe: "" } },
+      { k: "app", ic: "▶", t: "Capturar programa…", d: "Um player, o navegador, um jogo — escolha o .exe depois", node: { kind: "app", exe: "" } },
       ...ins.map((d) => ({ k: "app", ic: "🎙", t: d.device || d.name, d: `Receber de: ${d.name}`, node: { kind: "receive", device: d.id } })),
       ...outs.map((d) => ({ k: "app", ic: "👂", t: `Ouvir: ${d.device || d.name}`, d: `${d.name} · tudo o que toca nesta saída`, node: { kind: "listen", device: d.id } })),
     ]],
@@ -448,11 +447,6 @@ function catalogItems() {
       ...PL.found.filter((f) => f.supported !== false && pbFavs().includes(pbKey(f)))
         .map((f) => ({ k: "plugin", ic: "★", t: f.name || baseName(f.path), d: `favorito · ${f.format || "VST3"}`, plugin: f.path })),
     ]],
-    ["Plugins (todos)", FL.scanning && !PL.found.length
-      ? [{ k: "plugin", ic: "…", t: "Procurando plugins…", d: "só na primeira vez", node: null }]
-      : PL.found.map((f) => f.supported === false
-        ? { k: "plugin", ic: "✦", t: f.name || baseName(f.path), d: `${f.format} 32 bits — ainda não suportado`, node: null }
-        : { k: "plugin", ic: "✦", t: f.name || baseName(f.path), d: `plugin ${f.format || "VST3"}`, plugin: f.path })],
     ["Saídas", outs.map((d) => ({ k: "send", ic: "↗", t: `Enviar: ${d.device || d.name}`, d: d.name, node: { kind: "send", device: d.id } }))],
     ["Mandar para o microfone", PL.devices.filter((d) => d.kind === "Microfone" && d.id !== owner())
       .map((d) => ({ k: "send", ic: "🎙", t: `Para o mic: ${d.device || d.name}`, d: `${d.name} · o Discord recebe junto com a voz`, node: { kind: "tomic", device: d.id } }))],
