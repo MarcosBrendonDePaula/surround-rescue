@@ -8,7 +8,13 @@
 //! Entrada estéreo: frente = L/R, centro = parte comum, laterais/traseiras = ambiente (L−R) atrasado.
 //! Entrada 5.1/7.1: os canais reais.
 
+use crate::biquad::{Biquad, Coefs, Kind};
 use crate::hrir_kemar::{HRIR, LEN, RATE, STEP_DEG};
+
+/// Abaixo daqui o som não tem direção (a cabeça é pequena demais para fazer sombra) e as respostas
+/// do KEMAR são ruins (a caixa da medição tocava pouco grave: −4,5 dB em 40 Hz). Os graves vão direto
+/// aos ouvidos, no nível que a resposta tem logo acima, e só o resto passa pelas respostas de cabeça.
+const BASS_SPLIT: f64 = 180.0;
 
 const BUF: usize = 4096; // atraso do ambiente (até ~40 ms a 96 kHz)
 const MAX_TAPS: usize = 2 * LEN; // HRIR reamostrada até 96 kHz
@@ -157,6 +163,10 @@ pub struct Virtualizer {
     pub amb_gain: f64,
     /// Quanto de sala (0 = nenhuma)
     pub room_gain: f64,
+    /// peso de cada caixa em cada ouvido nos graves (nível da resposta em 300 Hz)
+    low_w: [[f32; 2]; SPEAKERS],
+    low_lp: [[Biquad; 2]; 2],
+    high_hp: [[Biquad; 2]; 2],
 }
 
 impl Virtualizer {
@@ -177,6 +187,9 @@ impl Virtualizer {
             room: Room::new(sr),
             amb_gain: 1.0,
             room_gain: 1.0,
+            low_w: [[1.0; 2]; SPEAKERS],
+            low_lp: [[Biquad::default(); 2]; 2],
+            high_hp: [[Biquad::default(); 2]; 2],
         };
         v.set(30.0);
         v
@@ -196,6 +209,22 @@ impl Virtualizer {
             let (l, r, n) = hrir_at(*a, self.sr);
             self.ir[i] = [l, r];
             self.taps = n;
+            // nível da resposta em 300 Hz (acima do defeito de graves da medição)
+            for e in 0..2 {
+                let w = 2.0 * std::f64::consts::PI * 300.0 / self.sr;
+                let (mut re, mut im) = (0.0f64, 0.0f64);
+                for (k, v) in self.ir[i][e][..n].iter().enumerate() {
+                    re += *v as f64 * (w * k as f64).cos();
+                    im += *v as f64 * (w * k as f64).sin();
+                }
+                self.low_w[i][e] = (re * re + im * im).sqrt() as f32;
+            }
+        }
+        let lp = Coefs::new(Kind::LowPass, self.sr, BASS_SPLIT, 0.0, std::f64::consts::FRAC_1_SQRT_2);
+        let hp = Coefs::new(Kind::HighPass, self.sr, BASS_SPLIT, 0.0, std::f64::consts::FRAC_1_SQRT_2);
+        for e in 0..2 {
+            self.low_lp[e].iter_mut().for_each(|b| b.set(lp));
+            self.high_hp[e].iter_mut().for_each(|b| b.set(hp));
         }
         let ms = |m: f64| ((m * 0.001 * self.sr) as usize).min(BUF - 1);
         self.amb_delay = [ms(7.0), ms(9.0), ms(15.0), ms(18.0)];
@@ -208,9 +237,12 @@ impl Virtualizer {
         let n = self.taps;
         let p = self.hpos;
         let mut mono = 0.0f32;
+        let mut low = [0.0f32; 2];
         for i in 0..SPEAKERS {
             let x = (ch[i] as f32) * self.gains[i];
             mono += x;
+            low[0] += x * self.low_w[i][0];
+            low[1] += x * self.low_w[i][1];
             self.hist[i][p] = x;
             self.hist[i][p + n] = x;
         }
@@ -225,7 +257,18 @@ impl Virtualizer {
         let (rl, rr) = self.room.process(mono * 0.25);
         let rg = (0.12 * self.room_gain) as f32;
         let k = 0.5f32; // as caixas somam nos dois ouvidos
-        ((k * out[0] + rg * rl) as f64 + 0.5 * lfe, (k * out[1] + rg * rr) as f64 + 0.5 * lfe)
+        // divisor Linkwitz-Riley: graves diretos + o resto pelas respostas de cabeça (a sala também
+        // perde os graves: graves com eco embola)
+        let hi = [k * out[0] + rg * rl, k * out[1] + rg * rr];
+        let mut ear = [0.0f64; 2];
+        for e in 0..2 {
+            let h = self.high_hp[e][0].process(hi[e] as f64);
+            let h = self.high_hp[e][1].process(h);
+            let l = self.low_lp[e][0].process((k * low[e]) as f64);
+            let l = self.low_lp[e][1].process(l);
+            ear[e] = h + l + 0.5 * lfe;
+        }
+        (ear[0], ear[1])
     }
 
     #[inline]
@@ -277,6 +320,7 @@ impl Virtualizer {
         self.amb_buf2.iter_mut().for_each(|v| *v = 0.0);
         self.amb_lp = [0.0; 2];
         self.room.reset();
+        self.low_lp.iter_mut().chain(self.high_hp.iter_mut()).for_each(|f| f.iter_mut().for_each(|b| b.reset()));
     }
 }
 
@@ -335,6 +379,31 @@ mod tests {
         }
         // KEMAR não é perfeitamente simétrico; a diferença tem de ser pequena
         assert!(d < 0.05, "voz no meio deve sair quase igual nos dois ouvidos ({d})");
+    }
+
+    #[test]
+    fn graves_nao_somem() {
+        // graves no meio do estéreo (onde fica o bumbo e o baixo)
+        let lvl = |f: f64| {
+            let mut v = Virtualizer::new(48000.0);
+            v.room_gain = 0.0;
+            v.amb_gain = 0.0;
+            let mut e = 0.0;
+            for n in 0..48000 {
+                let x = 0.2 * (2.0 * std::f64::consts::PI * f * n as f64 / 48000.0).sin();
+                let (a, _) = v.upmixed(x, x, 0.0, 0.0, 0.0);
+                if n > 24000 {
+                    e += a * a;
+                }
+            }
+            10.0 * e.log10()
+        };
+        // sem o buraco da medição: de 40 a 200 Hz no mesmo nível de 300 Hz
+        let refl = lvl(300.0);
+        for f in [40.0, 60.0, 100.0, 150.0, 200.0] {
+            let d = lvl(f) - refl;
+            assert!(d.abs() < 1.5, "{f} Hz: {d:+.1} dB em relação a 300 Hz");
+        }
     }
 
     #[test]
