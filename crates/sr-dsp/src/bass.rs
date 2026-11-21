@@ -39,7 +39,7 @@ impl BassBoost {
             env: 0.0,
             att: k(8.0),
             rel: k(150.0),
-            thr: 10f64.powf(-12.0 / 20.0),
+            thr: 10f64.powf(-6.0 / 20.0),
             gain: 1.0,
             harm: 0.0,
             on: false,
@@ -71,7 +71,7 @@ impl BassBoost {
         let p = lo[0].abs().max(lo[1].abs());
         let k = if p > self.env { self.att } else { self.rel };
         self.env = p + k * (self.env - p);
-        // acima de −12 dBFS o reforço some aos poucos (zero 12 dB acima); abaixo, reforço inteiro
+        // acima de −6 dBFS o reforço some aos poucos (zero 12 dB acima); abaixo, reforço inteiro
         let over_db = if self.env > self.thr { 20.0 * (self.env / self.thr).log10() } else { 0.0 };
         let boost = self.gain * (1.0 - over_db / 12.0).clamp(0.0, 1.0);
         let g = 10f64.powf(boost / 20.0);
@@ -117,10 +117,10 @@ mod tests {
             20.0 * (rms(&y[24000..]) / rms(&x[24000..])).log10()
         };
         let quiet = run(&mut b, 0.02);
-        let loud = run(&mut b, 0.8);
+        let loud = run(&mut b, 1.0);
         assert!(quiet > 3.0, "grave baixo subiu só {quiet:.1} dB");
         assert!(quiet > 6.0, "grave normal deveria ganhar o reforço inteiro ({quiet:.1} dB)");
-        assert!(loud < quiet - 3.0, "grave forte deveria subir bem menos ({loud:.1} dB)");
+        assert!(loud < quiet - 2.0, "grave forte deveria subir bem menos ({loud:.1} dB)");
         assert!(loud > -0.5, "nunca abaixa o graves original ({loud:.1} dB)");
     }
 

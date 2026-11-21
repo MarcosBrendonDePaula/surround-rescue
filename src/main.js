@@ -33,6 +33,7 @@ function render() {
   $("#p-del").disabled = c.profiles.length < 2;
 
   // campos do perfil
+  if ($("#surround-style")) $("#surround-style").value = s.surround_style || "razer";
   for (const el of $$("[data-s]")) {
     const k = el.dataset.s;
     if (el.type === "checkbox") el.checked = s[k];
@@ -358,6 +359,12 @@ function bind() {
 
   // testes
   $("#test-round").addEventListener("click", () => engineTest("ALL"));
+  $("#report-open")?.addEventListener("click", async () => {
+    const b = $("#report-open"); b.disabled = true; const t = b.textContent; b.textContent = "Abrindo…";
+    try { await invoke("report_issue", { lang: window.srLang || "pt" }); } catch (e) { $("#error").textContent = String(e); $("#error").hidden = false; }
+    b.textContent = t; b.disabled = false;
+  });
+  $("#surround-style").addEventListener("change", (e) => { cur().surround_style = e.target.value; render(); saveSoon(); });
   $("#test-stop").addEventListener("click", () => engineTest(null));
   window.addEventListener("beforeunload", () => { if (testing) invoke("engine_test", { speaker: -1 }); });
   bindStageDrag();
@@ -374,9 +381,24 @@ function winBind() {
   $(".titlebar").addEventListener("dblclick", (e) => { if (e.target.closest("[data-tauri-drag-region]") === e.target) w.toggleMaximize(); });
 }
 
+// ---------- motor desatualizado depois de atualizar o app ----------
+async function engineCheck() {
+  let items = [];
+  try { items = await invoke("engine_outdated"); } catch (e) { return; }
+  $("#engine-banner").hidden = !items.length;
+  if (!items.length) return;
+  $("#engine-update").onclick = async () => {
+    const b = $("#engine-update"); b.disabled = true; b.textContent = "Atualizando… aceite o pedido de administrador";
+    try { await invoke("set_engine", { on: true, items }); $("#engine-banner").hidden = true; }
+    catch (e) { $("#error").textContent = `Não deu certo: ${e}`; $("#error").hidden = false; }
+    b.disabled = false; b.textContent = "Atualizar o motor";
+  };
+}
+
 async function init() {
   snap = await invoke("get_snapshot");
   try { winBind(); } catch (e) { console.warn(e); }
+  engineCheck();
   bind();
   render();
   refreshStatus();

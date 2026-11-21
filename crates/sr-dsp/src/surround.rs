@@ -166,9 +166,18 @@ pub struct Virtualizer {
     /// peso de cada caixa em cada ouvido nos graves (nível da resposta em 300 Hz)
     low_w: [[f32; 2]; SPEAKERS],
     out_k: f32,
+    /// par de caixas por onde o estéreo toca: [0,1] = frente (estilo amplo), [3,4] = laterais (estilo Razer)
+    pair: [usize; 2],
+    angles: (f64, f64, f64),
+    calibrated: Option<(f64, f64, f64, [usize; 2])>,
     low_lp: [[Biquad; 2]; 2],
     high_hp: [[Biquad; 2]; 2],
+    /// equalizador automático (9 oitavas) que deixa o som da frente com o timbre original
+    tone: [[Biquad; TONE_BANDS]; 2],
 }
+
+const TONE_BANDS: usize = 9;
+const TONE_FREQS: [f64; TONE_BANDS] = [63.0, 125.0, 250.0, 500.0, 1000.0, 2000.0, 4000.0, 8000.0, 16000.0];
 
 impl Virtualizer {
     pub fn new(sr: f64) -> Self {
@@ -190,8 +199,12 @@ impl Virtualizer {
             room_gain: 1.0,
             low_w: [[1.0; 2]; SPEAKERS],
             out_k: 0.5,
+            pair: [0, 1],
+            angles: (30.0, 90.0, 150.0),
+            calibrated: None,
             low_lp: [[Biquad::default(); 2]; 2],
             high_hp: [[Biquad::default(); 2]; 2],
+            tone: [[Biquad::default(); TONE_BANDS]; 2],
         };
         v.set(30.0);
         v
@@ -203,9 +216,37 @@ impl Virtualizer {
         self.set_angles(front_angle, 90.0, 150.0);
     }
 
+    /// Estilo Razer: o estéreo toca nas caixas laterais (como o Nahimic mede: cruzamento a −12 dB,
+    /// 0,7 ms), sem centro, ambiente nem sala. Falso: estilo amplo (frente + centro + ambiente).
+    pub fn set_razer_style(&mut self, on: bool) {
+        let pair = if on { [3, 4] } else { [0, 1] };
+        if pair != self.pair {
+            self.pair = pair;
+            let (f, s, r) = self.angles;
+            self.set_angles(f, s, r);
+        }
+    }
+
+    /// Estéreo nas caixas laterais (estilo Razer).
+    #[inline]
+    pub fn side_pair(&mut self, l: f64, r: f64) -> (f64, f64) {
+        // o Nahimic manda cada lado para o ouvido oposto a ~−12 dB em todas as frequências; a resposta
+        // do KEMAR a 90° passa quase nada de agudo para o outro ouvido, então soma essa mistura antes
+        // (dividida para o que é igual nos dois lados não mudar de volume)
+        const XF: f64 = 0.3;
+        let k = 1.0 / (1.0 + XF);
+        self.render([0.0, 0.0, 0.0, k * (l + XF * r), k * (r + XF * l), 0.0, 0.0], 0.0)
+    }
+
     /// Ângulos de cada par de caixas (frente, laterais, traseiras), como a calibração da Razer.
     pub fn set_angles(&mut self, front: f64, side: f64, rear: f64) {
         let (fa, sa, ra) = (front.clamp(10.0, 80.0), side.clamp(60.0, 120.0), rear.clamp(110.0, 175.0));
+        // recalcular as respostas e o equalizador automático é caro: só quando algo mudou
+        if self.calibrated == Some((fa, sa, ra, self.pair)) {
+            return;
+        }
+        self.calibrated = Some((fa, sa, ra, self.pair));
+        self.angles = (fa, sa, ra);
         let az = [-fa, fa, 0.0, -sa, sa, -ra, ra];
         for (i, a) in az.iter().enumerate() {
             let (l, r, n) = hrir_at(*a, self.sr);
@@ -221,6 +262,10 @@ impl Virtualizer {
                 }
                 self.low_w[i][e] = (re * re + im * im).sqrt() as f32;
             }
+            // graves como num fone: cada lado só no seu ouvido (o cruzamento cancelava o baixo estéreo
+            // e somava demais o que é igual nos dois lados); o centro vai igual para os dois
+            let ipsi = self.low_w[i][0].max(self.low_w[i][1]);
+            self.low_w[i] = if *a < -1.0 { [ipsi, 0.0] } else if *a > 1.0 { [0.0, ipsi] } else { [ipsi * std::f32::consts::FRAC_1_SQRT_2; 2] };
         }
         // caixa do centro com o mesmo volume que a voz tinha vindo das duas caixas da frente
         // (média de 500 Hz a 4 kHz, no ouvido esquerdo; o direito é espelho). O upmix entrega o
@@ -236,8 +281,8 @@ impl Virtualizer {
         };
         let (mut ph, mut ce) = (0.0f64, 0.0f64);
         for f in [500.0, 700.0, 1000.0, 1400.0, 2000.0, 2800.0, 4000.0] {
-            let (a, b) = mag(&self.ir[0][0][..self.taps], f);
-            let (c, d) = mag(&self.ir[1][0][..self.taps], f);
+            let (a, b) = mag(&self.ir[self.pair[0]][0][..self.taps], f);
+            let (c, d) = mag(&self.ir[self.pair[1]][0][..self.taps], f);
             ph += (a + c).powi(2) + (b + d).powi(2);
             let (e, g) = mag(&self.ir[2][0][..self.taps], f);
             ce += e * e + g * g;
@@ -251,9 +296,82 @@ impl Virtualizer {
             self.low_lp[e].iter_mut().for_each(|b| b.set(lp));
             self.high_hp[e].iter_mut().for_each(|b| b.set(hp));
         }
+        self.calibrate_tone();
         let ms = |m: f64| ((m * 0.001 * self.sr) as usize).min(BUF - 1);
         self.amb_delay = [ms(7.0), ms(9.0), ms(15.0), ms(18.0)];
         self.amb_k = (-2.0 * std::f64::consts::PI * 7000.0 / self.sr).exp();
+    }
+
+    /// Resposta (dB, por oitava) do ouvido esquerdo a um som igual nas duas caixas da frente,
+    /// passando por tudo (graves diretos, respostas de cabeça, divisor, equalizador atual).
+    /// Simulação com cópias dos filtros: não mexe no estado do áudio.
+    fn front_response(&self, eq: &[Biquad; TONE_BANDS]) -> [f64; TONE_BANDS] {
+        const N: usize = 4096;
+        let n = self.taps;
+        let k = self.out_k as f64;
+        // resposta ao impulso das duas caixas somadas no ouvido esquerdo (a IR está invertida no tempo)
+        let mut conv = vec![0.0f64; N];
+        for spk in self.pair {
+            let g = self.gains[spk] as f64;
+            for t in 0..n {
+                conv[t] += g * self.ir[spk][0][n - 1 - t] as f64;
+            }
+        }
+        let [p0, p1] = self.pair;
+        let low_w = (self.gains[p0] * self.low_w[p0][0] + self.gains[p1] * self.low_w[p1][0]) as f64;
+        let (mut hp, mut lp, mut tq) = (self.high_hp[0], self.low_lp[0], *eq);
+        hp.iter_mut().chain(lp.iter_mut()).chain(tq.iter_mut()).for_each(|b| b.reset());
+        let mut y = vec![0.0f64; N];
+        for t in 0..N {
+            let h0 = hp[0].process(k * conv[t]);
+            let h = hp[1].process(h0);
+            let l0 = lp[0].process(if t == 0 { k * low_w } else { 0.0 });
+            let l = lp[1].process(l0);
+            let mut v = h + l;
+            for b in tq.iter_mut() {
+                v = b.process(v);
+            }
+            y[t] = v;
+        }
+        // nível por oitava: média de potência em 5 pontos dentro de cada oitava
+        let mut out = [0.0; TONE_BANDS];
+        for (i, fc) in TONE_FREQS.iter().enumerate() {
+            let mut p = 0.0;
+            for j in 0..5 {
+                let f = fc * 2f64.powf((j as f64 - 2.0) / 5.0);
+                let w = 2.0 * std::f64::consts::PI * f / self.sr;
+                let (mut re, mut im) = (0.0, 0.0);
+                for (t, v) in y.iter().enumerate() {
+                    re += v * (w * t as f64).cos();
+                    im -= v * (w * t as f64).sin();
+                }
+                p += re * re + im * im;
+            }
+            out[i] = 10.0 * (p / 5.0).max(1e-20).log10();
+        }
+        out
+    }
+
+    /// Ajusta o equalizador automático para o som da frente ficar plano (como sem o surround).
+    fn calibrate_tone(&mut self) {
+        let mut gains = [0.0f64; TONE_BANDS];
+        let mk = |g: &[f64; TONE_BANDS], sr: f64| {
+            let mut eq = [Biquad::default(); TONE_BANDS];
+            for (i, b) in eq.iter_mut().enumerate() {
+                let f = TONE_FREQS[i].min(sr * 0.45);
+                b.set(Coefs::new(Kind::Peaking, sr, f, g[i], 1.2));
+            }
+            eq
+        };
+        for _ in 0..3 {
+            let r = self.front_response(&mk(&gains, self.sr));
+            // alvo: 0 dB em todas as faixas (o mesmo som de quando o surround está desligado)
+            for i in 0..TONE_BANDS {
+                gains[i] = (gains[i] - 0.8 * r[i]).clamp(-9.0, 9.0);
+            }
+        }
+        let eq = mk(&gains, self.sr);
+        self.tone = [eq, eq];
     }
 
     /// Renderiza as 7 caixas (+ LFE) para os dois ouvidos.
@@ -292,7 +410,11 @@ impl Virtualizer {
             let h = self.high_hp[e][1].process(h);
             let l = self.low_lp[e][0].process((k * low[e]) as f64);
             let l = self.low_lp[e][1].process(l);
-            ear[e] = h + l + 0.5 * lfe;
+            let mut y = h + l;
+            for b in &mut self.tone[e] {
+                y = b.process(y);
+            }
+            ear[e] = y + 0.5 * lfe;
         }
         (ear[0], ear[1])
     }
@@ -326,7 +448,7 @@ impl Virtualizer {
         let a = [self.amb_buf[i(d[0])], self.amb_buf2[i(d[1])], self.amb_buf[i(d[2])], self.amb_buf2[i(d[3])]];
         self.pos = (self.pos + 1) % BUF;
         let g = self.amb_gain;
-        self.render([fl, fr, c, 0.8 * g * a[0], 0.8 * g * a[1], 0.6 * g * a[2], 0.6 * g * a[3]], 0.0)
+        self.render([fl, fr, c, 0.5 * g * a[0], 0.5 * g * a[1], 0.35 * g * a[2], 0.35 * g * a[3]], 0.0)
     }
 
     /// Quadro multicanal na ordem do Windows: FL FR C LFE BL BR SL SR (5.1: FL FR C LFE BL BR).

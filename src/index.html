@@ -14,7 +14,7 @@
   </div>
   <div class="profilebar">
     <span class="tb-label">Perfil</span>
-    <select id="profile" aria-label="Perfil"></select>
+    <select id="profile" aria-label="Perfil" data-no-i18n></select>
     <button class="icon" id="p-new" title="Novo perfil (cópia do atual)">+</button>
     <button class="icon" id="p-rename" title="Renomear perfil">✎</button>
     <button class="icon" id="p-del" title="Excluir perfil">×</button>
@@ -43,6 +43,8 @@
       <button data-tab="configuracoes" class="tab-settings"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M5.6 18.4l2.1-2.1M16.3 7.7l2.1-2.1"/></svg>Configurações</button>
     </nav>
     <div class="ver">
+      <button class="ver-guide" id="guide-open">Guia de início</button>
+      <button class="ver-guide" id="report-open" title="Abre uma issue no GitHub com os logs de execução (sem dados pessoais)">Relatar problema</button>
       <span id="ver-text">Versão …</span>
       <button class="ver-up" id="ver-up" hidden>Atualizar</button>
     </div>
@@ -58,6 +60,13 @@
         </div>
         <div class="stage-side">
           <h2 class="sect">Campo de som</h2>
+          <div class="field">
+            <div class="flabel"><span>Estilo do surround</span></div>
+            <select id="surround-style" aria-label="Estilo do surround">
+              <option value="razer">Razer: o som da música fica junto, como no Nahimic</option>
+              <option value="amplo">Amplo: centro na frente e ambiente em volta</option>
+            </select>
+          </div>
           <div class="field">
             <div class="flabel"><span>Caixas da frente</span><output data-o="front_angle"></output></div>
             <input type="range" data-s="front_angle" min="10" max="80" step="1">
@@ -202,7 +211,7 @@
           <div id="fl-side-dev"></div>
           <h3>Meus fluxos</h3>
           <p class="fl-side-hint">Começam em triggers (programas, microfones) e enviam para onde quiser.</p>
-          <div id="fl-side-flows"></div>
+          <div id="fl-side-flows" data-no-i18n></div>
           <button class="pill" id="fl-new-flow">+ Novo fluxo</button>
         </aside>
         <div class="fl-main">
@@ -251,12 +260,12 @@
         <p class="desc">Programas fora da lista usam o perfil escolhido no topo. Em uso agora: <b id="applied"></b></p>
         <table class="rules">
           <thead><tr><th>Programa</th><th>Perfil</th><th><span class="sr">Remover</span></th></tr></thead>
-          <tbody id="rules"></tbody>
+          <tbody id="rules" data-no-i18n></tbody>
         </table>
         <div class="addrule">
           <input id="rule-exe" placeholder="discord.exe" list="recent-apps" aria-label="Programa">
           <datalist id="recent-apps"></datalist>
-          <select id="rule-profile" aria-label="Perfil do programa"></select>
+          <select id="rule-profile" aria-label="Perfil do programa" data-no-i18n></select>
           <button class="pill solid" id="rule-add">Adicionar programa</button>
         </div>
         <p class="desc">Deixe o programa aberto e volte aqui: ele aparece nas sugestões.</p>
@@ -293,6 +302,14 @@
               <pre id="preview"></pre>
             </details>
           </div>
+        </div>
+        <div class="block cf-plugins">
+          <h2>Idioma</h2>
+          <select id="lang-pick" aria-label="Idioma">
+            <option value="auto">Automático (idioma do Windows)</option>
+            <option value="pt">Português</option>
+            <option value="en">English</option>
+          </select>
         </div>
         <div class="block cf-plugins">
           <h2>Atualização</h2>
@@ -333,6 +350,10 @@
       </section>
     </main>
     <p id="error" class="error" hidden></p>
+    <div class="banner" id="engine-banner" hidden>
+      <span>O app foi atualizado, mas o motor de som no Windows ainda é o da versão anterior.</span>
+      <button class="pill solid" id="engine-update">Atualizar o motor</button>
+    </div>
   </div>
 </div>
 <!-- NAVEGADOR DE PLUGINS (estilo FX Browser) -->
@@ -364,8 +385,25 @@
     </div>
   </div>
 </div>
+<!-- GUIA DE INÍCIO -->
+<div class="gd-back" id="guide" hidden>
+  <div class="gd" role="dialog" aria-modal="true" aria-labelledby="gd-title">
+    <ol class="gd-steps" id="gd-steps"></ol>
+    <div class="gd-main">
+      <button class="icon gd-x" id="gd-close" title="Fechar o guia">×</button>
+      <h2 id="gd-title"></h2>
+      <div id="gd-body"></div>
+      <div class="gd-nav">
+        <button class="pill" id="gd-back">Voltar</button>
+        <button class="pill solid" id="gd-next">Continuar</button>
+      </div>
+    </div>
+  </div>
+</div>
+<script src="i18n.js"></script>
 <script src="main.js"></script>
 <script src="flow.js"></script>
 <script src="browser.js"></script>
+<script src="guide.js"></script>
 </body>
 </html>

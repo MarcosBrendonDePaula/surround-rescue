@@ -350,11 +350,12 @@ impl Meters {
         }
     }
 
-    /// Lê e zera: (id da caixa, pico desde a última leitura).
-    pub fn take(&self) -> Vec<(String, f32)> {
-        let mut out: Vec<(String, f32)> = vec![];
-        for (id, p) in self.ids.iter().zip(&self.peaks) {
-            let v = f32::from_bits(p.swap(0, std::sync::atomic::Ordering::Relaxed));
+    /// Lê e zera: (id da caixa, [pico esquerdo, pico direito] desde a última leitura).
+    pub fn take(&self) -> Vec<(String, [f32; 2])> {
+        let mut out: Vec<(String, [f32; 2])> = vec![];
+        for (id, p) in self.ids.iter().zip(self.peaks.chunks_exact(2)) {
+            let rd = |a: &std::sync::atomic::AtomicU32| f32::from_bits(a.swap(0, std::sync::atomic::Ordering::Relaxed));
+            let v = [rd(&p[0]), rd(&p[1])];
             let base = id.split('#').next().unwrap_or(id).to_string();
             match out.iter_mut().find(|(k, _)| *k == base) {
                 // rack: vale o nível da última parte (o que sai da caixa)
@@ -460,7 +461,7 @@ impl AudioChain {
         let sends = graph.nodes.iter().enumerate().filter_map(|(i, n)| sends.remove(&n.id).map(|p| (i, p))).collect();
         let meters = Arc::new(Meters {
             ids: graph.nodes.iter().map(|n| n.id.clone()).collect(),
-            peaks: graph.nodes.iter().map(|_| std::sync::atomic::AtomicU32::new(0)).collect(),
+            peaks: graph.nodes.iter().flat_map(|_| [std::sync::atomic::AtomicU32::new(0), std::sync::atomic::AtomicU32::new(0)]).collect(),
         });
         AudioChain { updates: Arc::new(std::sync::Mutex::new(None)), sends, plan, procs: NodeProcs { plugins, blocks, sources, ab }, bufs, sample_rate, meters }
     }
@@ -490,14 +491,12 @@ impl AudioChain {
     /// Pico de cada caixa neste bloco (barato: um máximo por amostra).
     fn measure(&self, frames: usize) {
         for (i, b) in self.bufs.iter().enumerate() {
-            let mut m = 0.0f32;
+            // esquerdo e direito separados (o medidor mostra os dois canais)
             for c in 0..2 {
-                for v in b[c].iter().take(frames) {
-                    m = m.max(v.abs());
+                let m = b[c].iter().take(frames).fold(0.0f32, |m, v| m.max(v.abs()));
+                if m > 0.0 {
+                    self.meters.hit(2 * i + c, m);
                 }
-            }
-            if m > 0.0 {
-                self.meters.hit(i, m);
             }
         }
     }

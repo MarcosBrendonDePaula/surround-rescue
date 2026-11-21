@@ -99,6 +99,7 @@ impl SrParams {
             test_speaker: -1,
             spatial: self.spatial.value() as f64,
             room: true,
+            surround_style: "razer".into(),
             stereo_enhanced: self.stereo_enhanced.value(),
             bass_enabled: bass > 0.0,
             bass_level: bass,

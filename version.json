@@ -1,4 +1,4 @@
 {
-  "version": "0.6.0",
-  "notes": "Surround 7.1 virtual com respostas de cabeça medidas, centro e ambiente por frequência, sala virtual, graves com harmônicos, calibração de todas as caixas com som de teste, redução de ruído no microfone, fluxo que muda ao vivo e motor 2,7x mais leve."
+  "version": "0.6.1",
+  "notes": "Estilo de surround Razer (medido no motor Nahimic) como padrão e predefinição de equalizador Razer; som com timbre neutro e graves sem bombear; guia de início; interface nova sem a barra do Windows; mesa de som com entrada e saída em estéreo; traduções (português e inglês); botão Relatar problema; aviso para atualizar o motor depois de atualizar o app; correção: num PC só com o motor próprio o app não aplicava os ajustes."
 }
