@@ -2,6 +2,7 @@
 
 mod devices;
 mod engine;
+mod update;
 mod eqapo;
 mod plugins;
 mod profiles;
@@ -201,6 +202,24 @@ fn plugin_env() -> serde_json::Value {
 }
 
 #[tauri::command]
+async fn check_update(app: AppHandle) -> Result<update::Check, String> {
+    let cur = app.package_info().version.to_string();
+    tauri::async_runtime::spawn_blocking(move || update::check(cur)).await.map_err(|e| e.to_string())
+}
+
+/// Baixa e instala a versão nova; o app fecha (e o executor junto) e volta já atualizado.
+#[tauri::command]
+async fn install_update(app: AppHandle, version: String, host: State<'_, plugins::HostProcess>) -> Result<(), String> {
+    let v = version.clone();
+    tauri::async_runtime::spawn_blocking(move || update::download_and_run(&v)).await.map_err(|e| e.to_string())??;
+    if let Some(mut c) = host.0.lock().unwrap().take() {
+        let _ = c.kill();
+    }
+    app.exit(0);
+    Ok(())
+}
+
+#[tauri::command]
 fn get_levels() -> serde_json::Value {
     plugins::read_levels()
 }
@@ -287,7 +306,7 @@ fn main() {
         .plugin(tauri_plugin_single_instance::init(|app, _, _| show(app)))
         .manage(state)
         .manage(plugins::HostProcess(Mutex::new(None)))
-        .invoke_handler(tauri::generate_handler![get_snapshot, set_config, get_status, set_device_engine, set_autostart, preview, recent_apps, scan_plugins, get_chain, set_chain, host_status, open_plugin_window, audio_apps, list_flows, get_flow, set_flow, delete_flow, get_stats, plugin_env, engine_devices, set_engine, get_levels])
+        .invoke_handler(tauri::generate_handler![get_snapshot, set_config, get_status, set_device_engine, set_autostart, preview, recent_apps, scan_plugins, get_chain, set_chain, host_status, open_plugin_window, audio_apps, list_flows, get_flow, set_flow, delete_flow, get_stats, plugin_env, engine_devices, set_engine, get_levels, check_update, install_update])
         .setup(|app| {
             let show_i = MenuItem::with_id(app, "show", "Abrir", true, None::<&str>)?;
             let toggle_i = MenuItem::with_id(app, "toggle", "Ligar/Desligar surround", true, None::<&str>)?;

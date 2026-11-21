@@ -267,10 +267,16 @@ function flRender() {
 }
 
 // ---------- painel de propriedades ----------
+function flClosePanel() {
+  FL.open = false;
+  clearInterval(FL.meterTimer);
+  $("#fl-panel").hidden = true;
+}
+
 function flPanel() {
   const g = graph();
   const box = $("#fl-panel");
-  if (!FL.sel) { box.hidden = true; return; }
+  if (!FL.sel || !FL.open) { box.hidden = true; clearInterval(FL.meterTimer); return; }
   $("#fl-creator").hidden = true;
   box.hidden = false;
   let h = "";
@@ -410,7 +416,7 @@ function flPanel() {
       fv.addEventListener("input", () => { n.value = Number(fv.value); $("#fl-fx-v").textContent = `${n.value} ${FX[n.fx].unit}`; fillPct(fv); flSaveSoon(); flRender(); });
     }
   }
-  box.querySelector("[data-close]")?.addEventListener("click", () => { FL.sel = null; flRender(); flPanel(); });
+  box.querySelector("[data-close]")?.addEventListener("click", (ev) => { ev.stopPropagation(); flClosePanel(); flRender(); });
 }
 
 // ---------- mesa de som ----------
@@ -482,7 +488,7 @@ function startMeters(box, g) {
 }
 
 function bindMixer(box, g) {
-  box.querySelectorAll(".strip").forEach((st) => {
+  box.querySelectorAll(".strip[data-edge-i]").forEach((st) => {
     const e = g.edges[Number(st.dataset.edgeI)];
     const f = st.querySelector(".fader");
     const out = st.querySelector(".strip-db");
@@ -625,6 +631,7 @@ function flCreate(it) {
   $("#fl-creator").hidden = true;
   FL.pending = null;
   FL.sel = { node: node.id };
+  FL.open = true;
   flChanged();
   flPanel();
 }
@@ -710,8 +717,21 @@ function flFit() {
 
 // ---------- eventos ----------
 function flBind() {
+  document.body.appendChild($("#fl-panel"));
+  $("#fl-panel").addEventListener("click", (ev) => { if (ev.target.id === "fl-panel") ev.stopPropagation(); });
+  $("#fl-canvas").addEventListener("dblclick", (ev) => {
+    const t = ev.target;
+    if (t.closest(".btn") || t.dataset.portIn || t.dataset.portOut) return;
+    const nodeEl = t.closest("[data-node]");
+    if (nodeEl) FL.sel = { node: nodeEl.dataset.node };
+    else if (t.dataset.edge !== undefined) FL.sel = { edge: Number(t.dataset.edge) };
+    else return;
+    FL.open = true;
+    flRender();
+    flPanel();
+  });
   document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape" && !$("#fl-panel").hidden && $("#pb").hidden) { FL.sel = null; clearInterval(FL.meterTimer); flRender(); flPanel(); }
+    if (e.key === "Escape" && !$("#fl-panel").hidden && $("#pb").hidden) { flClosePanel(); flRender(); }
   });
   const svg = $("#fl-canvas");
   svg.addEventListener("pointerdown", (ev) => {
@@ -743,13 +763,11 @@ function flBind() {
       FL.sel = { node: n.id };
       svg.setPointerCapture(ev.pointerId);
       flRender();
-      flPanel();
       return;
     }
     if (t.dataset.edge !== undefined) {
       FL.sel = { edge: Number(t.dataset.edge) };
       flRender();
-      flPanel();
       return;
     }
     // fundo: arrastar a tela
