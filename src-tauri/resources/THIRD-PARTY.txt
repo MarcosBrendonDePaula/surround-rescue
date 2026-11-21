@@ -6,3 +6,10 @@ Código-fonte e licença: https://sourceforge.net/projects/equalizerapo/
 
 O instalador é distribuído sem modificações e executado em modo silencioso
 apenas quando o Equalizer APO ainda não está instalado.
+
+Respostas da cabeça (HRIR) do surround virtual
+Medições do boneco KEMAR — Bill Gardner e Keith Martin, MIT Media Laboratory (1994).
+"Copyright 1994 by the MIT Media Laboratory. It is provided free with no restrictions
+on use, provided the authors are cited when the data is used in any research or
+commercial application."
+https://sound.media.mit.edu/resources/KEMAR.html

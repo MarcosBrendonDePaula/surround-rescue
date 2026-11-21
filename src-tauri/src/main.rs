@@ -1,6 +1,8 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod devices;
+mod engine;
+mod update;
 mod eqapo;
 mod plugins;
 mod profiles;
@@ -22,6 +24,8 @@ struct AppState {
     last_text: Mutex<String>,
     /// Programas vistos em primeiro plano (sugestões na aba PERFIS)
     seen: Mutex<std::collections::BTreeSet<String>>,
+    /// Teste de calibração tocando agora (−1 = nenhum)
+    test: Mutex<i32>,
 }
 
 fn config_path() -> std::path::PathBuf {
@@ -31,7 +35,8 @@ fn config_path() -> std::path::PathBuf {
 fn load() -> Config {
     fs::read_to_string(config_path())
         .ok()
-        .and_then(|t| serde_json::from_str::<Config>(&t).ok())
+        // arquivo editado à mão pode vir com BOM (ex.: PowerShell): ignora a marca
+        .and_then(|t| serde_json::from_str::<Config>(t.trim_start_matches('\u{feff}')).ok())
         .unwrap_or_default()
         .normalized()
 }
@@ -50,7 +55,8 @@ fn apply_now(state: &AppState) -> Result<String, String> {
             state.seen.lock().unwrap().insert(e.clone());
         }
     }
-    let profile = cfg.resolve(fg.as_deref()).clone();
+    let mut profile = cfg.resolve(fg.as_deref()).clone();
+    profile.settings.test_speaker = *state.test.lock().unwrap();
     let hp = system::pick(&devices::list("Render"), cfg.output_device.as_deref());
     let mic = system::pick(&devices::list("Capture"), cfg.input_device.as_deref());
     // motor próprio ativo: o Equalizer APO fica em "passa direto" para o efeito não sair em dobro
@@ -62,7 +68,7 @@ fn apply_now(state: &AppState) -> Result<String, String> {
     };
     let out = eqapo::generate(&profile.settings);
     let mic_txt = eqapo::generate_mic(&cfg.mic);
-    let joined = format!("{root}\0{out}\0{mic_txt}");
+    let joined = format!("{root}\0{out}\0{mic_txt}\0{}", profile.settings.test_speaker);
     let mut last = state.last_text.lock().unwrap();
     if *last != joined {
         system::apply(&root, &out, &mic_txt)?;
@@ -106,6 +112,13 @@ fn snapshot(state: &AppState) -> Snapshot {
         applied: state.applied.lock().unwrap().clone(),
         eq_presets: eqapo::eq_presets().into_iter().map(|(a, b, c)| (a.into(), b.into(), c)).collect(),
     }
+}
+
+/// Toca o som de teste numa caixa virtual (0..6), em todas (7) ou para (−1). Só no motor próprio.
+#[tauri::command]
+fn engine_test(speaker: i32, state: State<AppState>) -> Result<(), String> {
+    *state.test.lock().unwrap() = speaker.clamp(-1, 7);
+    apply_now(&state).map(|_| ())
 }
 
 #[tauri::command]
@@ -184,6 +197,45 @@ fn open_plugin_window(endpoint: String, index: usize, host: State<plugins::HostP
 }
 
 #[tauri::command]
+async fn engine_devices() -> Result<Vec<engine::DevEngine>, String> {
+    tauri::async_runtime::spawn_blocking(engine::list).await.map_err(|e| e.to_string())
+}
+
+/// Instala ou remove o motor próprio nos dispositivos (um pedido de administrador para todos).
+#[tauri::command]
+async fn set_engine(on: bool, items: Vec<(String, String)>) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || engine::apply_elevated(on, &items)).await.map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+fn plugin_env() -> serde_json::Value {
+    serde_json::json!({ "bridge32": plugins::bridge32_installed() })
+}
+
+#[tauri::command]
+async fn check_update(app: AppHandle) -> Result<update::Check, String> {
+    let cur = app.package_info().version.to_string();
+    tauri::async_runtime::spawn_blocking(move || update::check(cur)).await.map_err(|e| e.to_string())
+}
+
+/// Baixa e instala a versão nova; o app fecha (e o executor junto) e volta já atualizado.
+#[tauri::command]
+async fn install_update(app: AppHandle, version: String, host: State<'_, plugins::HostProcess>) -> Result<(), String> {
+    let v = version.clone();
+    tauri::async_runtime::spawn_blocking(move || update::download_and_run(&v)).await.map_err(|e| e.to_string())??;
+    if let Some(mut c) = host.0.lock().unwrap().take() {
+        let _ = c.kill();
+    }
+    app.exit(0);
+    Ok(())
+}
+
+#[tauri::command]
+fn get_levels() -> serde_json::Value {
+    plugins::read_levels()
+}
+
+#[tauri::command]
 fn get_stats() -> serde_json::Value {
     plugins::read_stats()
 }
@@ -246,10 +298,18 @@ fn show(app: &AppHandle) {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
+    // o mesmo .exe é o executor de plugins (processo separado: plugin com defeito não derruba a janela)
+    if args.get(1).is_some_and(|a| sr_host::MODES.contains(&a.as_str())) {
+        sr_host::entry(args);
+        return;
+    }
     if let Some(code) = devices::handle_cli(&args) {
         std::process::exit(code);
     }
-    let state = AppState { config: Mutex::new(load()), applied: Mutex::new(String::new()), last_text: Mutex::new(String::new()), seen: Mutex::new(Default::default()) };
+    if let Some(code) = engine::handle_cli(&args) {
+        std::process::exit(code);
+    }
+    let state = AppState { config: Mutex::new(load()), applied: Mutex::new(String::new()), last_text: Mutex::new(String::new()), seen: Mutex::new(Default::default()), test: Mutex::new(-1) };
     // Reaplica na inicialização: garante o estado salvo mesmo após reinício.
     let _ = apply_now(&state);
 
@@ -257,7 +317,7 @@ fn main() {
         .plugin(tauri_plugin_single_instance::init(|app, _, _| show(app)))
         .manage(state)
         .manage(plugins::HostProcess(Mutex::new(None)))
-        .invoke_handler(tauri::generate_handler![get_snapshot, set_config, get_status, set_device_engine, set_autostart, preview, recent_apps, scan_plugins, get_chain, set_chain, host_status, open_plugin_window, audio_apps, list_flows, get_flow, set_flow, delete_flow, get_stats])
+        .invoke_handler(tauri::generate_handler![engine_test, get_snapshot, set_config, get_status, set_device_engine, set_autostart, preview, recent_apps, scan_plugins, get_chain, set_chain, host_status, open_plugin_window, audio_apps, list_flows, get_flow, set_flow, delete_flow, get_stats, plugin_env, engine_devices, set_engine, get_levels, check_update, install_update])
         .setup(|app| {
             let show_i = MenuItem::with_id(app, "show", "Abrir", true, None::<&str>)?;
             let toggle_i = MenuItem::with_id(app, "toggle", "Ligar/Desligar surround", true, None::<&str>)?;

@@ -176,7 +176,7 @@ mod tests {
         assert!(!txt.contains("SR_M"), "estéreo melhorado desligado por padrão");
         assert!(txt.contains("Copy: SR_XL=R SR_XR=L"));
         assert!(txt.contains("Delay: 0.325 ms"));
-        assert!(txt.contains("Filter: ON LSC Fc 105 Hz Gain 2.4 dB"));
+        assert!(txt.contains("Filter: ON LSC Fc 105 Hz Gain 1.4 dB"));
         assert!(!txt.contains("Fc 125 Hz"), "EQ plano não gera filtro");
     }
 
@@ -192,7 +192,7 @@ mod tests {
 
     #[test]
     fn mic_boost_and_filters() {
-        let m = MicSettings { enabled: true, boost: true, gain_db: 0.0, rumble_filter: true, clarity: 50.0 };
+        let m = MicSettings { enabled: true, boost: true, gain_db: 0.0, rumble_filter: true, clarity: 50.0, gate: false, gate_db: -45.0, noise_reduction: false, nr_db: 12.0 };
         let t = generate_mic(&m);
         assert!(t.contains("Preamp: 6 dB"));
         assert!(t.contains("Filter: ON HP Fc 90 Hz"));

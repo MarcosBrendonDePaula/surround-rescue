@@ -94,7 +94,11 @@ impl SrParams {
         Settings {
             enabled: self.enabled.value(),
             front_angle: self.front_angle.value() as f64,
+            side_angle: 90.0,
+            rear_angle: 150.0,
+            test_speaker: -1,
             spatial: self.spatial.value() as f64,
+            room: true,
             stereo_enhanced: self.stereo_enhanced.value(),
             bass_enabled: bass > 0.0,
             bass_level: bass,
@@ -162,10 +166,12 @@ impl Plugin for SurroundRescue {
         create_egui_editor(self.params.editor_state.clone(), (), |ctx, _| editor::setup(ctx), move |ctx, setter, _| editor::draw(ctx, setter, &params))
     }
 
-    fn initialize(&mut self, _: &AudioIOLayout, cfg: &BufferConfig, _: &mut impl InitContext<Self>) -> bool {
+    fn initialize(&mut self, _: &AudioIOLayout, cfg: &BufferConfig, ctx: &mut impl InitContext<Self>) -> bool {
         // alocação só aqui, fora do processamento em tempo real
         let mut p = Processor::new(cfg.sample_rate as f64);
         p.set(&self.params.settings());
+        // a DAW compensa a antecipação do limitador (1,5 ms)
+        ctx.set_latency_samples(p.latency() as u32);
         self.dsp = Some(p);
         self.last = self.params.fingerprint();
         true

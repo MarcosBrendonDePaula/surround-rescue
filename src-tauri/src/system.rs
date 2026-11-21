@@ -65,8 +65,10 @@ pub fn status(out_choice: Option<&str>, in_choice: Option<&str>) -> Status {
 }
 
 fn razer_running() -> bool {
+    use std::os::windows::process::CommandExt;
     Command::new("sc")
         .args(["query", "RzSurroundVADStreamingService"])
+        .creation_flags(0x0800_0000) // sem janela de console
         .output()
         .map(|o| String::from_utf8_lossy(&o.stdout).contains("RUNNING"))
         .unwrap_or(false)

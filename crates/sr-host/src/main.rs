@@ -21,6 +21,7 @@ mod stats;
 mod vst2;
 mod clap;
 mod bridge32;
+mod bus;
 
 use chain::{chains_dir, root_dir, AudioChain, ChainConfig, Loaded};
 use std::collections::HashMap;
@@ -66,6 +67,9 @@ struct Device {
     slot: Slot,
     stop: Arc<AtomicBool>,
     timing: Arc<stats::Timing>,
+    meters: Option<Arc<chain::Meters>>,
+    updates: Option<chain::UpdateSlot>,
+    pending_reload: bool,
 }
 
 impl Device {
@@ -84,6 +88,9 @@ impl Device {
             slot: Arc::new(Mutex::new(None)),
             stop: Arc::new(AtomicBool::new(false)),
             timing: stats::Timing::new(),
+            meters: None,
+            updates: None,
+            pending_reload: false,
         }
     }
 
@@ -97,7 +104,8 @@ impl Device {
         log(&format!("{}: conectado ao APO", self.endpoint));
         self.channel = Some(c.clone());
         let (slot, stop, timing) = (self.slot.clone(), self.stop.clone(), self.timing.clone());
-        std::thread::spawn(move || audio_thread(c, slot, stop, timing));
+        let ep = self.endpoint.clone();
+        std::thread::spawn(move || audio_thread(c, slot, stop, timing, ep));
     }
 
     fn close_windows(&mut self) {
@@ -118,20 +126,39 @@ impl Device {
         let io = build_io(&self.endpoint, self.cfg.graph.as_ref(), sr);
         self.senders = io.senders;
         self.captures = io.captures;
-        *self.slot.lock().unwrap() = Some(AudioChain::new(&self.loaded, &self.cfg, sr as f64, io.producers, io.consumers, &log));
+        let ch = AudioChain::new(&self.loaded, &self.cfg, sr as f64, io.producers, io.consumers, &log);
+        self.meters = Some(ch.meters.clone());
+        self.updates = Some(ch.updates());
+        *self.slot.lock().unwrap() = Some(ch);
+    }
+
+    /// Ciclo rápido (100 ms): o arquivo mudou? Mudança leve (volume, pan, ligações, valores) vai
+    /// direto para a cadeia tocando; mudança de estrutura recarrega. Devolve true se precisa recarregar.
+    fn check_file(&mut self) -> bool {
+        let m = mtime(&self.file);
+        if m == self.seen {
+            return false;
+        }
+        self.seen = m;
+        let new = read_chain(&self.file);
+        if self.loaded_sr > 0 {
+            if let (Some(u), Some(slot)) = (chain::soft_update(&self.cfg, &new, self.loaded_sr as f64), &self.updates) {
+                *slot.lock().unwrap() = Some(u);
+                self.cfg = new;
+                return false;
+            }
+        }
+        chain::save_states(&self.endpoint, &self.loaded, &log);
+        self.cfg = new;
+        log(&format!("{}: cadeia alterada ({} plugins)", self.endpoint, self.cfg.plugins.len()));
+        true
     }
 
     /// Ciclo lento (1 s): canal, mudanças no arquivo e na taxa.
     fn tick(&mut self) {
         self.connect();
-        let m = mtime(&self.file);
-        let changed = m != self.seen;
-        if changed {
-            self.seen = m;
-            chain::save_states(&self.endpoint, &self.loaded, &log);
-            self.cfg = read_chain(&self.file);
-            log(&format!("{}: cadeia alterada ({} plugins)", self.endpoint, self.cfg.plugins.len()));
-        }
+        let changed = self.check_file() || self.pending_reload;
+        self.pending_reload = false;
         let sr = self.channel.as_ref().map(|c| c.header().sample_rate.load(Ordering::Relaxed)).unwrap_or(0);
         if sr > 0 && (changed || sr != self.loaded_sr) {
             self.reload(sr);
@@ -195,6 +222,7 @@ pub struct Io {
 /// enviar para o próprio dispositivo, para quem envia de volta, ou para uma saída que o fluxo ouve.
 pub fn build_io(owner: &str, g: Option<&graph::Graph>, sr: u32) -> Io {
     let mut io = Io { producers: HashMap::new(), consumers: HashMap::new(), senders: vec![], captures: vec![] };
+    bus::detach(owner);
     let Some(g) = g else { return io };
     let listened: Vec<String> = g
         .nodes
@@ -213,6 +241,15 @@ pub fn build_io(owner: &str, g: Option<&graph::Graph>, sr: u32) -> Io {
                 log(&format!("{owner}: enviando para {dev}"));
                 io.producers.insert(n.id.clone(), prod);
                 io.senders.push(s);
+            }
+            graph::NodeKind::Tomic { device } => {
+                let mic = device.to_lowercase();
+                if mic == owner {
+                    log(&format!("{owner}: mandar para o próprio microfone recusado (viraria eco)"));
+                    continue;
+                }
+                log(&format!("{owner}: mandando para o microfone {mic}"));
+                io.producers.insert(n.id.clone(), bus::attach(&mic, owner, &n.id));
             }
             graph::NodeKind::App { exe } if !exe.is_empty() => {
                 let (cons, c) = capture::Capture::start(capture::Source::App(exe.clone()), sr, log);
@@ -257,7 +294,7 @@ fn sends_back(from: &str, to: &str) -> bool {
     false
 }
 
-fn audio_thread(ch: Arc<sr_ipc::Channel>, slot: Slot, stop: Arc<AtomicBool>, timing: Arc<stats::Timing>) {
+fn audio_thread(ch: Arc<sr_ipc::Channel>, slot: Slot, stop: Arc<AtomicBool>, timing: Arc<stats::Timing>, endpoint: String) {
     let mut chain: Option<AudioChain> = None;
     while !stop.load(Ordering::SeqCst) {
         if let Ok(mut s) = slot.try_lock() {
@@ -271,6 +308,8 @@ fn audio_thread(ch: Arc<sr_ipc::Channel>, slot: Slot, stop: Arc<AtomicBool>, tim
                 let frames = audio.len() / (chs as usize).max(1);
                 timing.measure(frames, sr as f64, || c.process(audio, chs as usize));
             }
+            // som mandado por outros fluxos para este microfone ("Mandar para o microfone")
+            bus::mix_into(&endpoint, audio, chs as usize);
         });
     }
 }
@@ -314,8 +353,10 @@ fn run() {
     let mut devices: HashMap<String, Device> = HashMap::new();
     let mut free_flows: HashMap<String, flows::Flow> = HashMap::new();
     let mut last_tick = Instant::now() - Duration::from_secs(10);
+    let mut last_fast = Instant::now();
     let mut last_save = Instant::now();
     let mut last_stats = Instant::now();
+    let mut last_levels = Instant::now();
     loop {
         pump_messages();
         for d in devices.values_mut() {
@@ -333,6 +374,18 @@ fn run() {
                 },
             }
         }
+        // mudanças nos fluxos chegam em até 100 ms
+        if last_fast.elapsed() >= Duration::from_millis(100) {
+            last_fast = Instant::now();
+            for d in devices.values_mut() {
+                if d.check_file() {
+                    d.pending_reload = true;
+                }
+            }
+            for f in free_flows.values_mut() {
+                f.check_file();
+            }
+        }
         if last_tick.elapsed() >= Duration::from_secs(1) {
             last_tick = Instant::now();
             // um dispositivo por arquivo de cadeia; arquivo removido = dispositivo encerrado
@@ -345,6 +398,14 @@ fn run() {
                         present.push(ep.clone());
                         devices.entry(ep.clone()).or_insert_with(|| Device::new(ep, p));
                     }
+                }
+            }
+            // microfone que recebe envio precisa ser atendido mesmo sem fluxo próprio
+            for ep in bus::targets() {
+                if !present.contains(&ep) {
+                    let p = dir.join(format!("{ep}.json"));
+                    devices.entry(ep.clone()).or_insert_with(|| Device::new(ep.clone(), p));
+                    present.push(ep);
                 }
             }
             devices.retain(|ep, _| present.contains(ep));
@@ -393,6 +454,26 @@ fn run() {
                 all.push(f.stats());
             }
             stats::write(&all);
+        }
+        // níveis de cada caixa para os medidores da mesa (~15 vezes por segundo)
+        if last_levels.elapsed() >= Duration::from_millis(66) {
+            last_levels = Instant::now();
+            let mut lv = serde_json::Map::new();
+            for d in devices.values().filter(|d| d.channel.is_some()) {
+                if let Some(m) = &d.meters {
+                    lv.insert(d.endpoint.clone(), serde_json::json!(m.take().into_iter().collect::<HashMap<_, _>>()));
+                }
+            }
+            for f in free_flows.values() {
+                if let Some(m) = f.meters() {
+                    lv.insert(f.id.clone(), serde_json::json!(m.take().into_iter().collect::<HashMap<_, _>>()));
+                }
+            }
+            let p = chain::root_dir().join("levels.json");
+            let tmp = p.with_extension("ltmp");
+            if std::fs::write(&tmp, serde_json::Value::Object(lv).to_string()).is_ok() {
+                let _ = std::fs::rename(&tmp, &p);
+            }
         }
         // ajustes salvos de tempos em tempos (caso o executor seja fechado à força)
         if last_save.elapsed() >= Duration::from_secs(30) {
@@ -502,7 +583,7 @@ fn scan(extra: &[String]) {
     .map(PathBuf::from)
     .collect();
     for key in [r"SOFTWARE\VST", r"SOFTWARE\WOW6432Node\VST"] {
-        if let Ok(v) = std::process::Command::new("reg").args(["query", &format!(r"HKLM\{key}"), "/v", "VSTPluginsPath"]).output() {
+        if let Ok(v) = { use std::os::windows::process::CommandExt; std::process::Command::new("reg").args(["query", &format!(r"HKLM\{key}"), "/v", "VSTPluginsPath"]).creation_flags(0x0800_0000).output() } {
             let t = String::from_utf8_lossy(&v.stdout);
             if let Some(path) = t.lines().find_map(|l| l.split("REG_SZ").nth(1)).map(|x| x.trim().to_string()) {
                 dirs2.push(PathBuf::from(path));
@@ -609,8 +690,16 @@ fn test_capture(what: &str, secs: u64) {
     println!("capturado: {:.2} s de áudio a 48 kHz | nível RMS {rms:.4} | pico {peak:.3} | frequência ≈ {freq:.0} Hz", n as f64 / 48000.0);
 }
 
+/// Modos que o app repassa para o executor (`surround-rescue.exe --host`, `--scan`…).
+pub const MODES: &[&str] = &["--host", "--scan", "--test", "--apps", "--capture"];
+
+#[allow(dead_code)]
 fn main() {
-    let args: Vec<String> = std::env::args().collect();
+    entry(std::env::args().collect());
+}
+
+/// Ponto de entrada do executor (do sr-host.exe ou do próprio app com `--host`).
+pub fn entry(args: Vec<String>) {
     match args.get(1).map(|s| s.as_str()) {
         Some("--apps") => return println!("{}", serde_json::to_string(&capture::audio_apps()).unwrap()),
         Some("--capture") => return test_capture(args.get(2).expect("informe o .exe"), args.get(3).and_then(|s| s.parse().ok()).unwrap_or(5)),

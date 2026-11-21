@@ -4,6 +4,12 @@ version = "0.1.0"
 edition = "2021"
 description = "Executor de VST3 do Surround Rescue: roda a cadeia de plugins de cada dispositivo para o APO"
 
+# O mesmo código serve de biblioteca: o app (surround-rescue.exe --host) roda o executor
+# sem precisar de um segundo .exe. O binário sr-host continua para testes de linha de comando.
+[lib]
+name = "sr_host"
+path = "src/main.rs"
+
 [[bin]]
 name = "sr-host"
 path = "src/main.rs"

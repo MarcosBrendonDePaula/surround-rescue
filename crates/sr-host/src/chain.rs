@@ -331,13 +331,89 @@ impl crate::graph::Processor for NodeProcs {
 }
 
 /// Lado do áudio: o fluxo planejado, os plugins e buffers próprios (sem alocar no bloco).
+/// Nível de pico de cada caixa (para os medidores da mesa). O áudio grava o maior valor;
+/// quem lê zera. Racks aparecem pelo id da caixa (as partes "id#n" somam no mesmo).
+pub struct Meters {
+    pub ids: Vec<String>,
+    peaks: Vec<std::sync::atomic::AtomicU32>,
+}
+
+impl Meters {
+    fn hit(&self, i: usize, v: f32) {
+        let a = &self.peaks[i];
+        let mut cur = a.load(std::sync::atomic::Ordering::Relaxed);
+        while v > f32::from_bits(cur) {
+            match a.compare_exchange_weak(cur, v.to_bits(), std::sync::atomic::Ordering::Relaxed, std::sync::atomic::Ordering::Relaxed) {
+                Ok(_) => break,
+                Err(x) => cur = x,
+            }
+        }
+    }
+
+    /// Lê e zera: (id da caixa, pico desde a última leitura).
+    pub fn take(&self) -> Vec<(String, f32)> {
+        let mut out: Vec<(String, f32)> = vec![];
+        for (id, p) in self.ids.iter().zip(&self.peaks) {
+            let v = f32::from_bits(p.swap(0, std::sync::atomic::Ordering::Relaxed));
+            let base = id.split('#').next().unwrap_or(id).to_string();
+            match out.iter_mut().find(|(k, _)| *k == base) {
+                // rack: vale o nível da última parte (o que sai da caixa)
+                Some(e) => e.1 = v,
+                None => out.push((base, v)),
+            }
+        }
+        out
+    }
+}
+
+/// Mudança leve num fluxo que já está tocando: novas ligações (volume, pan, mudo, solo, conexões) e
+/// novos valores de efeitos nativos. Aplicada no começo do próximo bloco, sem recarregar plugins.
+pub struct Update {
+    plan: Option<crate::graph::Plan>,
+    /// por nó: Some = bloco nativo novo (valor mudou); None = mantém
+    blocks: Vec<Option<crate::blocks::Block>>,
+}
+
+pub type UpdateSlot = Arc<std::sync::Mutex<Option<Update>>>;
+
+/// Dá para aplicar `new` sobre `old` sem recarregar? (mesmos plugins e as mesmas caixas)
+pub fn soft_update(old: &ChainConfig, new: &ChainConfig, sample_rate: f64) -> Option<Update> {
+    if old.plugins != new.plugins {
+        return None;
+    }
+    let g = |c: &ChainConfig| c.graph.clone().unwrap_or_else(|| crate::graph::Graph::serial(c.plugins.len())).expand_racks();
+    let (go, gn) = (g(old), g(new));
+    if go.nodes.len() != gn.nodes.len() {
+        return None;
+    }
+    let mut blocks = Vec::with_capacity(gn.nodes.len());
+    for (a, b) in go.nodes.iter().zip(&gn.nodes) {
+        if a.id != b.id {
+            return None;
+        }
+        use crate::graph::NodeKind::Fx;
+        match (&a.kind, &b.kind) {
+            (Fx { fx: fa, value: va }, Fx { fx: fb, value: vb }) if fa == fb => {
+                blocks.push((va != vb).then(|| crate::blocks::Block::new(*fb, *vb, sample_rate)));
+            }
+            (ka, kb) if ka == kb => blocks.push(None),
+            _ => return None,
+        }
+    }
+    let free = !gn.nodes.iter().any(|n| n.id == crate::graph::INPUT);
+    let plan = if free { crate::graph::plan_free(&gn) } else { crate::graph::plan(&gn) }.ok();
+    Some(Update { plan, blocks })
+}
+
 pub struct AudioChain {
+    updates: UpdateSlot,
     /// Envios para outros dispositivos: (nó, fila da ponte)
     sends: Vec<(usize, sr_bridge::ring::Producer)>,
     plan: Option<crate::graph::Plan>,
     procs: NodeProcs,
     bufs: Vec<[Vec<f32>; 2]>,
     sample_rate: f64,
+    pub meters: Arc<Meters>,
 }
 
 impl AudioChain {
@@ -350,7 +426,7 @@ impl AudioChain {
         mut sources: std::collections::HashMap<String, sr_bridge::ring::Consumer>,
         log: &dyn Fn(&str),
     ) -> AudioChain {
-        let graph = cfg.graph.clone().unwrap_or_else(|| crate::graph::Graph::serial(cfg.plugins.len()));
+        let graph = cfg.graph.clone().unwrap_or_else(|| crate::graph::Graph::serial(cfg.plugins.len())).expand_racks();
         // fluxo independente (sem a caixa "in") usa o plano livre
         let free = !graph.nodes.iter().any(|n| n.id == crate::graph::INPUT);
         let planned = if free { crate::graph::plan_free(&graph) } else { crate::graph::plan(&graph) };
@@ -382,11 +458,48 @@ impl AudioChain {
         ab.block_size = 0;
         let bufs = (0..graph.nodes.len()).map(|_| [Vec::with_capacity(MAX_FRAMES), Vec::with_capacity(MAX_FRAMES)]).collect();
         let sends = graph.nodes.iter().enumerate().filter_map(|(i, n)| sends.remove(&n.id).map(|p| (i, p))).collect();
-        AudioChain { sends, plan, procs: NodeProcs { plugins, blocks, sources, ab }, bufs, sample_rate }
+        let meters = Arc::new(Meters {
+            ids: graph.nodes.iter().map(|n| n.id.clone()).collect(),
+            peaks: graph.nodes.iter().map(|_| std::sync::atomic::AtomicU32::new(0)).collect(),
+        });
+        AudioChain { updates: Arc::new(std::sync::Mutex::new(None)), sends, plan, procs: NodeProcs { plugins, blocks, sources, ab }, bufs, sample_rate, meters }
     }
 
     pub fn sample_rate(&self) -> f64 {
         self.sample_rate
+    }
+
+    /// Onde o controle entrega mudanças leves para esta cadeia.
+    pub fn updates(&self) -> UpdateSlot {
+        self.updates.clone()
+    }
+
+    /// Aplica uma mudança leve que chegou (não espera: se o controle estiver escrevendo, fica pro próximo bloco).
+    #[inline]
+    fn poll_update(&mut self) {
+        let Ok(mut u) = self.updates.try_lock() else { return };
+        let Some(u) = u.take() else { return };
+        self.plan = u.plan;
+        for (slot, b) in self.procs.blocks.iter_mut().zip(u.blocks) {
+            if let Some(b) = b {
+                *slot = Some(b);
+            }
+        }
+    }
+
+    /// Pico de cada caixa neste bloco (barato: um máximo por amostra).
+    fn measure(&self, frames: usize) {
+        for (i, b) in self.bufs.iter().enumerate() {
+            let mut m = 0.0f32;
+            for c in 0..2 {
+                for v in b[c].iter().take(frames) {
+                    m = m.max(v.abs());
+                }
+            }
+            if m > 0.0 {
+                self.meters.hit(i, m);
+            }
+        }
     }
 
     /// Entrega aos envios (fila cheia = descarta; nunca espera).
@@ -401,13 +514,16 @@ impl AudioChain {
 
     /// Fluxo independente: roda um bloco sem entrada/saída do APO (triggers → envios).
     pub fn process_free(&mut self, frames: usize) {
+        self.poll_update();
         let Some(plan) = &self.plan else { return };
         crate::graph::run(plan, &mut self.bufs, frames.min(MAX_FRAMES), &mut self.procs);
         self.deliver(frames.min(MAX_FRAMES));
+        self.measure(frames.min(MAX_FRAMES));
     }
 
     /// Processa áudio intercalado (canais 0 e 1; demais passam direto).
     pub fn process(&mut self, audio: &mut [f32], channels: usize) {
+        self.poll_update();
         let Some(plan) = &self.plan else { return };
         if channels < 2 {
             return;
@@ -420,11 +536,41 @@ impl AudioChain {
         }
         crate::graph::run(plan, &mut self.bufs, frames, &mut self.procs);
         self.deliver(frames);
+        self.measure(frames);
         let out = &self.bufs[plan.output];
         for c in 0..2 {
             for i in 0..frames {
                 audio[i * channels + c] = out[c][i];
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod soft_tests {
+    use super::*;
+    use crate::graph::{Edge, Graph, Node, NodeKind, INPUT, OUTPUT};
+
+    fn cfg(gain: f32, fx_value: f32, extra: bool) -> ChainConfig {
+        let n = |id: &str, kind: NodeKind| Node { id: id.into(), kind, x: 0.0, y: 0.0 };
+        let mut nodes = vec![n(INPUT, NodeKind::Input), n("g", NodeKind::Fx { fx: crate::blocks::Fx::Gain, value: fx_value }), n(OUTPUT, NodeKind::Output)];
+        if extra {
+            nodes.push(n("m", NodeKind::Mixer));
+        }
+        let e = |a: &str, b: &str, gain| Edge { from: a.into(), to: b.into(), gain, mute: false, pan: 0.0, solo: false };
+        ChainConfig { plugins: vec![], graph: Some(Graph { nodes, edges: vec![e(INPUT, "g", gain), e("g", OUTPUT, 1.0)] }) }
+    }
+
+    #[test]
+    fn volume_e_valores_mudam_sem_recarregar() {
+        let u = soft_update(&cfg(1.0, 0.0, false), &cfg(0.5, -6.0, false), 48000.0).expect("mudança leve");
+        assert!(u.plan.is_some());
+        assert!(u.blocks[1].is_some(), "o bloco de ganho mudou de valor");
+        assert!(u.blocks[0].is_none() && u.blocks[2].is_none());
+    }
+
+    #[test]
+    fn caixa_nova_recarrega() {
+        assert!(soft_update(&cfg(1.0, 0.0, false), &cfg(1.0, 0.0, true), 48000.0).is_none());
     }
 }

@@ -222,7 +222,7 @@ pre { white-space: pre-wrap; font-size: 11.5px; color: var(--soft); background: 
 #fl-canvas .node:hover .card { stroke: color-mix(in srgb, var(--kind) 70%, var(--line)); }
 #fl-canvas .node.sel .card { stroke: var(--kind); stroke-width: 2.5; }
 #fl-canvas .node .badge { fill: color-mix(in srgb, var(--kind) 22%, transparent); }
-#fl-canvas .node .glyph { fill: var(--kind); font: 700 17px var(--display); text-anchor: middle; dominant-baseline: central; pointer-events: none; }
+#fl-canvas .node .glyph { fill: none; stroke: var(--kind); stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; pointer-events: none; overflow: visible; }
 #fl-canvas .node .title { fill: var(--ink); font: 600 14px var(--display); pointer-events: none; }
 #fl-canvas .node .sub { fill: var(--soft); font: 11.5px var(--body); pointer-events: none; }
 #fl-canvas .node .stripe { fill: var(--kind); }
@@ -352,3 +352,118 @@ pre { white-space: pre-wrap; font-size: 11.5px; color: var(--soft); background: 
 .pb-dirform[hidden] { display: none; }
 .pb-dirform input { flex: 1; }
 .pb-empty { padding: 30px; color: var(--soft); text-align: center; }
+
+/* Configurações: pastas de plugins */
+.cf-plugins { margin-top: 16px; }
+.cf-list { list-style: none; margin: 10px 0; padding: 0; display: grid; gap: 6px; }
+.cf-list li { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
+.cf-list li small { color: var(--soft); white-space: nowrap; }
+.cf-list .cf-path { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cf-list .cf-empty { color: var(--soft); border-style: dashed; background: none; }
+.cf-defaults li { padding: 4px 8px; font-size: 12px; color: var(--soft); }
+.cf-row { display: flex; gap: 8px; }
+.cf-row input { flex: 1; }
+
+/* rack de VST (painel do Fluxo) */
+.rk-list { display: grid; gap: 4px; margin: 8px 0 10px; }
+.rk-row { display: flex; align-items: center; gap: 4px; padding: 6px 6px 6px 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
+.rk-row.off .rk-name { opacity: .45; text-decoration: line-through; }
+.rk-n { font: 600 11px var(--display); color: var(--soft); width: 16px; }
+.rk-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+.rk-name small { margin-left: 6px; color: var(--soft); font-size: 11px; }
+.rk-row .icon { width: 24px; height: 24px; font-size: 11px; }
+.rk-row .icon[disabled] { opacity: .3; cursor: default; }
+
+/* ícones de traço (catálogo, mesa de som) */
+.ico { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
+.strip-ic .ico { width: 15px; height: 15px; }
+
+/* ---------- janela grande de configuração das caixas (estilo janela de FX) ---------- */
+.fl-drawer { position: fixed; inset: 6vh 0 0 0; margin: 0 auto; top: 6vh; bottom: 6vh; left: 0; right: 0; width: min(1080px, 92vw);
+  z-index: 40; padding: 20px 24px; overflow: auto; border: 1px solid var(--line);
+  box-shadow: 0 0 0 100vmax rgba(5, 8, 20, .6), 0 24px 70px rgba(0, 0, 0, .45); }
+.fl-drawer-head { align-items: flex-start; padding-bottom: 14px; margin-bottom: 16px; border-bottom: 1px solid var(--line); }
+.fl-modal-title { display: flex; gap: 14px; align-items: center; min-width: 0; }
+.fl-modal-title h2 { margin: 0; font-size: 20px; }
+.fl-modal-title .desc { margin: 2px 0 0; }
+.strip-ic.big { width: 44px; height: 44px; border-radius: 12px; }
+.strip-ic.big .ico { width: 24px; height: 24px; }
+#fl-panel .pill { width: auto; }
+#fl-panel .field { max-width: 520px; }
+
+/* caixa VST: fila | plugin selecionado */
+.rk { display: grid; grid-template-columns: minmax(280px, 380px) 1fr; gap: 18px; min-height: 300px; }
+.rk-list { align-content: start; margin: 0; }
+.rk-row { cursor: pointer; }
+.rk-row.sel { border-color: var(--amber); box-shadow: inset 3px 0 0 var(--amber); }
+.rk-detail { border: 1px solid var(--line); border-radius: 12px; padding: 18px; background: var(--night); }
+.rk-big { display: flex; gap: 14px; align-items: center; }
+.rk-big .ico { width: 40px; height: 40px; color: var(--amber); }
+.rk-big h3 { margin: 0; font: 600 18px var(--display); }
+.rk-path { font-size: 12px; color: var(--soft); word-break: break-all; margin: 12px 0; }
+.rk-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+@media (max-width: 760px) { .rk { grid-template-columns: 1fr; } }
+
+/* ---------- mesa de som ---------- */
+.mx { gap: 8px; padding: 10px 4px 6px; }
+.strip { min-width: 76px; padding: 10px 6px; gap: 8px; border: 1px solid var(--line); }
+.strip.master { min-width: 90px; border-color: color-mix(in srgb, var(--amber) 50%, var(--line)); margin-left: 8px; }
+.strip-name { max-width: 72px; font-size: 12px; color: var(--ink); }
+.strip-pan { display: grid; justify-items: center; gap: 2px; min-height: 34px; }
+.strip-pan .pan { width: 62px; }
+.strip-pan output { font: 600 10px var(--display); color: var(--soft); }
+.strip-body { display: flex; align-items: stretch; gap: 6px; height: 200px; }
+.strip .fader { height: 200px; }
+.meter { position: relative; width: 8px; height: 100%; border-radius: 4px; background: var(--deep); overflow: hidden; }
+.meter.wide { width: 18px; }
+.meter i { position: absolute; left: 0; right: 0; bottom: 0; height: 0; border-radius: 4px;
+  background: linear-gradient(0deg, var(--ok) 0%, var(--ok) 70%, var(--warn) 86%, var(--bad) 100%); background-size: 100% 200px; background-position: bottom; }
+.meter.wide i { background-size: 100% 200px; }
+.meter b { position: absolute; left: 0; right: 0; height: 2px; background: var(--ink); opacity: .7; }
+.meter.hot { box-shadow: 0 0 0 1px var(--bad); }
+.strip-ms { display: flex; gap: 4px; min-height: 24px; }
+.strip-solo { width: 30px; height: 24px; border-radius: 6px; border: 1px solid var(--line); background: var(--surface); font: 700 11px var(--display); cursor: pointer; }
+.strip.soloed .strip-solo { background: var(--warn); color: #2a1a00; border-color: var(--warn); }
+.strip-peak { color: var(--ink); }
+
+/* ---------- mesa v2: canal de console ---------- */
+.mx { gap: 10px; padding: 12px 4px 8px; align-items: stretch; }
+.strip { min-width: 96px; width: 96px; padding: 12px 8px 10px; gap: 10px; border-radius: 14px;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--surface) 70%, var(--night)) 0%, var(--night) 100%);
+  border: 1px solid var(--line); }
+.strip:hover { border-color: color-mix(in srgb, var(--amber) 35%, var(--line)); }
+.strip.master { width: 112px; min-width: 112px; background: linear-gradient(180deg, color-mix(in srgb, var(--amber) 12%, var(--surface)) 0%, var(--night) 100%); }
+.strip-name { max-width: 84px; text-align: center; font: 600 12px var(--display); line-height: 1.2; height: 2.4em; overflow: hidden; white-space: normal; }
+.strip-pan { width: 100%; position: relative; }
+.strip-pan .pan { width: 76px; }
+.strip-pan::before { content: ""; position: absolute; left: 50%; top: 2px; width: 1px; height: 8px; background: var(--soft); opacity: .5; }
+.strip-body { position: relative; display: grid; grid-template-columns: 22px 26px 14px; gap: 4px; height: 220px; justify-content: center; }
+.strip.master .strip-body { grid-template-columns: 22px 26px; }
+.strip .fader { height: 220px; width: 26px; }
+.scale { position: relative; height: 100%; }
+.scale span { position: absolute; right: 0; transform: translateY(50%); font: 600 9px var(--display); color: var(--soft); font-variant-numeric: tabular-nums; }
+.meter { width: 14px; border-radius: 5px; background: var(--deep); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--line) 70%, transparent); }
+.meter.wide { width: 26px; }
+.meter i { position: absolute; left: 2px; right: 2px; bottom: 2px; height: 0; border-radius: 3px; transition: height 60ms linear; }
+.meter .pre { background: color-mix(in srgb, var(--ink) 18%, transparent); }
+.meter .post { background: linear-gradient(0deg, var(--ok) 0px, var(--ok) 150px, var(--warn) 185px, var(--bad) 212px); background-size: 100% 216px; background-position: bottom; }
+.meter b { left: 2px; right: 2px; height: 2px; border-radius: 1px; }
+.strip-db { font: 700 13px var(--display); }
+.strip-ms button { width: 34px; height: 26px; }
+
+/* nível ao vivo nas caixas do desenho */
+#fl-canvas .lvl-bg { fill: var(--deep); }
+#fl-canvas .lvl { fill: var(--ok); transition: width 90ms linear; }
+#fl-canvas .lvl.hot { fill: var(--bad); }
+/* pan: trilho neutro (não é volume), marca no centro */
+.strip-pan .pan::-webkit-slider-runnable-track { background: var(--line) !important; }
+.strip-pan .pan::-webkit-slider-thumb { width: 14px; height: 14px; }
+#tabs button[hidden] { display: none; }
+
+/* aviso de atualização no menu */
+#tabs button.has-update { position: relative; }
+#tabs button.has-update::after { content: ""; position: absolute; top: 9px; left: 26px; width: 8px; height: 8px; border-radius: 50%; background: var(--amber); }
+
+/* calibração: caixa tocando o teste */
+#stage .spk.playing { fill: var(--amber); stroke: var(--amber); }
+#stage .spkg { cursor: pointer; }

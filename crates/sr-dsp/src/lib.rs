@@ -1,12 +1,18 @@
 //! Motor de áudio do Surround Rescue.
 //!
-//! - Atraso zero: só filtros IIR e dinâmica sem "lookahead".
+//! - Atraso mínimo: filtros IIR e um limitador que olha 1,5 ms à frente.
 //! - Sem alocação de memória dentro de `process` (seguro para tempo real: APO, VST3, ASIO).
 //! - As mesmas `Settings` usadas pelo app, pelo plugin e pelo APO.
 
 pub mod biquad;
 pub mod dynamics;
 pub mod processor;
+pub mod bass;
+pub mod hrir_kemar;
+pub mod nr;
+pub mod stft;
+pub mod upmix;
+pub mod surround;
 
 pub use processor::{MicProcessor, Processor};
 
@@ -24,8 +30,17 @@ pub struct Settings {
     // ---- CALIBRAÇÃO ----
     /// Ângulo das caixas frontais em graus (Razer: AngleFrontLeft = 30)
     pub front_angle: f64,
+    /// Ângulo das caixas laterais (Razer: 90)
+    pub side_angle: f64,
+    /// Ângulo das caixas traseiras (Razer: 150)
+    pub rear_angle: f64,
+    /// Teste de calibração: −1 = desligado; 0..6 = toca ruído só nessa caixa (FL FR C SL SR BL BR);
+    /// 7 = dá a volta por todas. Não é salvo no perfil (o app liga e desliga).
+    pub test_speaker: i32,
     /// Intensidade do som surround virtual 0..=100
     pub spatial: f64,
+    /// Sala virtual: um eco curto que tira o som de dentro da cabeça
+    pub room: bool,
     // ---- ÁUDIO ----
     /// "Estéreo melhorado" (WidenStereoSound)
     pub stereo_enhanced: bool,
@@ -52,7 +67,11 @@ impl Default for Settings {
         Settings {
             enabled: true,
             front_angle: 30.0,
+            side_angle: 90.0,
+            rear_angle: 150.0,
+            test_speaker: -1,
             spatial: 50.0,
+            room: true,
             stereo_enhanced: false,
             bass_enabled: true,
             bass_level: 20.0,
@@ -89,7 +108,10 @@ fn clamp(v: f64, lo: f64, hi: f64) -> f64 {
 impl Settings {
     pub fn sanitized(&self) -> Settings {
         let mut s = self.clone();
-        s.front_angle = clamp(s.front_angle, 10.0, 90.0);
+        s.front_angle = clamp(s.front_angle, 10.0, 80.0);
+        s.side_angle = clamp(s.side_angle, 60.0, 120.0);
+        s.rear_angle = clamp(s.rear_angle, 110.0, 175.0);
+        s.test_speaker = s.test_speaker.clamp(-1, 7);
         s.spatial = clamp(s.spatial, 0.0, 100.0);
         s.bass_level = clamp(s.bass_level, 0.0, 100.0);
         s.normalization_level = clamp(s.normalization_level, 0.0, 100.0);
@@ -103,7 +125,8 @@ impl Settings {
     }
 
     pub fn bass_db(&self) -> f64 {
-        if self.bass_enabled { self.bass_level / 100.0 * 12.0 } else { 0.0 }
+        // até +7 dB: mais que isso o graves empurra tudo para o limitador (a Razer/Nahimic usa ~5 dB)
+        if self.bass_enabled { self.bass_level / 100.0 * 7.0 } else { 0.0 }
     }
     pub fn presence_db(&self) -> f64 {
         if self.clarity_enabled { self.clarity_presence / 100.0 * 6.0 } else { 0.0 }
@@ -143,11 +166,19 @@ pub struct MicSettings {
     pub rumble_filter: bool,
     /// Nitidez da voz 0..=100
     pub clarity: f64,
+    /// Porta de ruído: fecha o microfone quando só há ruído de fundo (o Nahimic deixava ligada)
+    pub gate: bool,
+    /// Abaixo deste nível (dBFS) a porta fecha
+    pub gate_db: f64,
+    /// Redução de ruído de fundo por frequência (ventilador, chiado)
+    pub noise_reduction: bool,
+    /// Quanto abaixar o ruído, em dB
+    pub nr_db: f64,
 }
 
 impl Default for MicSettings {
     fn default() -> Self {
-        MicSettings { enabled: false, boost: false, gain_db: 0.0, rumble_filter: true, clarity: 30.0 }
+        MicSettings { enabled: false, boost: false, gain_db: 0.0, rumble_filter: true, clarity: 30.0, gate: true, gate_db: -45.0, noise_reduction: true, nr_db: 12.0 }
     }
 }
 
