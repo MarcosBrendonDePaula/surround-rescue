@@ -12,6 +12,7 @@
 //! (n = posição na lista do arquivo de cadeia).
 
 mod chain;
+mod graph;
 
 use chain::{chains_dir, root_dir, AudioChain, ChainConfig, Loaded};
 use std::collections::HashMap;
@@ -97,8 +98,7 @@ impl Device {
         log(&format!("{}: preparando cadeia a {sr} Hz", self.endpoint));
         self.loaded = chain::load(&self.endpoint, &self.cfg, sr as f64, &log);
         self.loaded_sr = sr;
-        let shared = self.loaded.iter().map(|l| l.plugin.clone()).collect();
-        *self.slot.lock().unwrap() = Some(AudioChain::new(shared, sr as f64));
+        *self.slot.lock().unwrap() = Some(AudioChain::new(&self.loaded, &self.cfg, sr as f64, &log));
     }
 
     /// Ciclo lento (1 s): canal, mudanças no arquivo e na taxa.
@@ -271,14 +271,14 @@ fn scan() {
 }
 
 fn test_plugin(path: &str) {
-    let cfg = ChainConfig { plugins: vec![chain::PluginEntry { path: path.into(), enabled: true }] };
+    let cfg = ChainConfig { plugins: vec![chain::PluginEntry { path: path.into(), enabled: true }], graph: None };
     let loaded = chain::load("{teste}", &cfg, 48000.0, &|m| println!("{m}"));
     if loaded.is_empty() {
         println!("FALHOU: plugin não carregou");
         std::process::exit(1);
     }
     let editor = loaded[0].plugin.lock().map(|p| p.has_editor()).unwrap_or(false);
-    let mut c = AudioChain::new(loaded.iter().map(|l| l.plugin.clone()).collect(), 48000.0);
+    let mut c = AudioChain::new(&loaded, &cfg, 48000.0, &|m| println!("{m}"));
     let mut audio: Vec<f32> = (0..48000 * 2).map(|i| ((i / 2) as f32 * 2.0 * std::f32::consts::PI * 440.0 / 48000.0).sin() * 0.5).collect();
     let orig = audio.clone();
     let t0 = Instant::now();

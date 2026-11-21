@@ -19,6 +19,7 @@
       <button data-tab="equalizador"><svg viewBox="0 0 24 24"><path d="M6 4v16M12 4v16M18 4v16"/><circle cx="6" cy="14" r="2"/><circle cx="12" cy="8" r="2"/><circle cx="18" cy="16" r="2"/></svg>Equalizador</button>
       <button data-tab="microfone"><svg viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21"/></svg>Microfone</button>
       <button data-tab="plugins"><svg viewBox="0 0 24 24"><path d="M9 3v5M15 3v5"/><rect x="5" y="8" width="14" height="6" rx="2"/><path d="M12 14v3a3 3 0 0 1-3 3"/></svg>Plugins</button>
+      <button data-tab="fluxo"><svg viewBox="0 0 24 24"><rect x="2" y="4" width="7" height="6" rx="1.5"/><rect x="15" y="14" width="7" height="6" rx="1.5"/><path d="M9 7h3a3 3 0 0 1 3 3v4"/></svg>Fluxo</button>
       <button data-tab="perfis"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M7 10h6M7 14h10"/></svg>Perfis</button>
       <button data-tab="configuracoes"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M5.6 18.4l2.1-2.1M16.3 7.7l2.1-2.1"/></svg>Configurações</button>
     </nav>
@@ -163,6 +164,25 @@
         </div>
       </section>
 
+      <!-- FLUXO -->
+      <section id="tab-fluxo" class="tab">
+        <div class="eqhead">
+          <h1>Fluxo de áudio</h1>
+          <select id="fl-device" aria-label="Dispositivo"></select>
+        </div>
+        <p class="lead">Puxe uma seta da bolinha de saída de uma caixa até a entrada de outra. Cada caixa soma o que chega nela. Duplo clique num plugin abre a janela dele.</p>
+        <div class="fl-toolbar">
+          <select id="fl-found" aria-label="Plugins instalados"></select>
+          <button class="pill solid" id="fl-add">Adicionar plugin</button>
+          <button class="pill" id="fl-mixer">Adicionar mixer</button>
+          <button class="pill" id="fl-serial">Organizar em fila</button>
+        </div>
+        <div class="fl-wrap">
+          <div class="fl-scroll"><svg id="fl-canvas" aria-label="Editor de fluxo"></svg></div>
+          <aside id="fl-panel" class="fl-panel"></aside>
+        </div>
+      </section>
+
       <!-- PERFIS -->
       <section id="tab-perfis" class="tab">
         <h1>Perfis por programa</h1>
@@ -218,5 +238,6 @@
   </div>
 </div>
 <script src="main.js"></script>
+<script src="flow.js"></script>
 </body>
 </html>

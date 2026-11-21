@@ -185,3 +185,31 @@ pre { white-space: pre-wrap; font-size: 11.5px; color: var(--soft); background: 
 .chain .grip { color: var(--soft); letter-spacing: -3px; user-select: none; }
 .chain li.dragging { opacity: .4; }
 .chain li.drop-here { outline: 2px dashed var(--amber); outline-offset: 2px; }
+
+/* fluxo */
+.fl-toolbar { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+.fl-wrap { display: grid; grid-template-columns: 1fr 230px; gap: 12px; }
+@media (max-width: 860px) { .fl-wrap { grid-template-columns: 1fr; } }
+.fl-scroll { overflow: auto; height: 480px; border-radius: 12px; background: var(--surface); }
+#fl-canvas { display: block; touch-action: none; user-select: none;
+  background-image: radial-gradient(var(--line) 1px, transparent 1px); background-size: 22px 22px; }
+#fl-canvas .edge { fill: none; stroke: var(--amber); stroke-width: 2.5; stroke-dasharray: 7 6; animation: fl-flow 0.9s linear infinite; }
+#fl-canvas .edge.sel { stroke-width: 4.5; }
+#fl-canvas .edge.weak { opacity: .55; }
+#fl-canvas .hit { fill: none; stroke: transparent; stroke-width: 14; cursor: pointer; }
+#fl-canvas .wire { fill: none; stroke: var(--amber); stroke-width: 2; stroke-dasharray: 3 4; opacity: .8; }
+#fl-canvas .gain { fill: var(--amber); font: 600 11px var(--display); text-anchor: middle; }
+#fl-canvas .node rect.box { fill: var(--night); stroke: var(--line); stroke-width: 1.5; cursor: grab; }
+#fl-canvas .node.sel rect.box { stroke: var(--amber); stroke-width: 2.5; }
+#fl-canvas .node.input rect.box, #fl-canvas .node.output rect.box { fill: var(--deep); }
+#fl-canvas .node.off { opacity: .5; }
+#fl-canvas .node .title { fill: var(--ink); font: 600 13px var(--display); pointer-events: none; }
+#fl-canvas .node .sub { fill: var(--soft); font: 11px var(--body); pointer-events: none; }
+#fl-canvas .port { fill: var(--surface); stroke: var(--amber); stroke-width: 2; cursor: crosshair; }
+#fl-canvas .port:hover, #fl-canvas .port.target { fill: var(--amber); }
+.fl-panel { background: var(--surface); border-radius: 12px; padding: 14px; align-self: start; }
+.fl-panel h2 { margin-bottom: 6px; }
+.fl-panel .pill { width: 100%; margin-top: 8px; }
+@keyframes fl-flow { to { stroke-dashoffset: -13; } }
+@media (prefers-reduced-motion: reduce) { #fl-canvas .edge { animation: none; } }
+.chain-locked { color: var(--warn); }

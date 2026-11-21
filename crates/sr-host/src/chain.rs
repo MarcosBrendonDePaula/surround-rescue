@@ -27,6 +27,9 @@ fn yes() -> bool {
 pub struct ChainConfig {
     #[serde(default)]
     pub plugins: Vec<PluginEntry>,
+    /// Fluxo desenhado no editor. Ausente = fila na ordem de `plugins`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub graph: Option<crate::graph::Graph>,
 }
 
 pub fn root_dir() -> PathBuf {
@@ -99,18 +102,67 @@ pub fn save_states(endpoint: &str, loaded: &[Loaded], log: &dyn Fn(&str)) {
     }
 }
 
-/// Lado do áudio: buffers próprios + referências aos plugins.
+/// Liga os nós do fluxo aos plugins carregados.
+struct NodeProcs {
+    plugins: Vec<Option<Shared>>,
+    ab: AudioBuffers,
+}
+
+impl crate::graph::Processor for NodeProcs {
+    fn process(&mut self, node: usize, l: &mut [f32], r: &mut [f32]) -> bool {
+        let Some(Some(p)) = self.plugins.get(node) else { return false };
+        // janela usando o plugin agora? pula este plugin neste bloco (o som segue)
+        let Ok(mut g) = p.try_lock() else { return false };
+        let frames = l.len();
+        self.ab.block_size = frames;
+        for (c, src) in [&*l, &*r].into_iter().enumerate() {
+            self.ab.inputs[c].clear();
+            self.ab.inputs[c].extend_from_slice(src);
+            self.ab.outputs[c].resize(frames, 0.0);
+        }
+        if g.process_audio(&mut self.ab).is_err() {
+            return false;
+        }
+        for (c, dst) in [l, r].into_iter().enumerate() {
+            for (d, v) in dst.iter_mut().zip(&self.ab.outputs[c]) {
+                *d = if v.is_finite() { *v } else { 0.0 };
+            }
+        }
+        true
+    }
+}
+
+/// Lado do áudio: o fluxo planejado, os plugins e buffers próprios (sem alocar no bloco).
 pub struct AudioChain {
-    plugins: Vec<Shared>,
+    plan: Option<crate::graph::Plan>,
+    procs: NodeProcs,
+    bufs: Vec<[Vec<f32>; 2]>,
     sample_rate: f64,
-    buf: AudioBuffers,
 }
 
 impl AudioChain {
-    pub fn new(plugins: Vec<Shared>, sample_rate: f64) -> AudioChain {
-        let mut buf = AudioBuffers::new(2, 2, MAX_FRAMES, sample_rate);
-        buf.block_size = 0;
-        AudioChain { plugins, sample_rate, buf }
+    /// `loaded` = plugins carregados (com a posição na lista); `cfg` traz o fluxo (ou vira fila).
+    pub fn new(loaded: &[Loaded], cfg: &ChainConfig, sample_rate: f64, log: &dyn Fn(&str)) -> AudioChain {
+        let graph = cfg.graph.clone().unwrap_or_else(|| crate::graph::Graph::serial(cfg.plugins.len()));
+        let plan = match crate::graph::plan(&graph) {
+            Ok(p) => Some(p),
+            Err(e) => {
+                log(&format!("fluxo inválido ({e:?}): som passa direto"));
+                None
+            }
+        };
+        let plugins = graph
+            .nodes
+            .iter()
+            .map(|n| match n.kind {
+                crate::graph::NodeKind::Plugin { plugin } => loaded.iter().find(|l| l.index == plugin).map(|l| l.plugin.clone()),
+                _ => None,
+            })
+            .collect();
+        let mut ab = AudioBuffers::new(2, 2, MAX_FRAMES, sample_rate);
+        ab.block_size = 0;
+        let bufs = (0..graph.nodes.len()).map(|_| [Vec::with_capacity(MAX_FRAMES), Vec::with_capacity(MAX_FRAMES)]).collect();
+        AudioChain { plan, procs: NodeProcs { plugins, ab }, bufs, sample_rate }
     }
 
     pub fn sample_rate(&self) -> f64 {
@@ -119,29 +171,21 @@ impl AudioChain {
 
     /// Processa áudio intercalado (canais 0 e 1; demais passam direto).
     pub fn process(&mut self, audio: &mut [f32], channels: usize) {
-        if self.plugins.is_empty() || channels < 2 {
+        let Some(plan) = &self.plan else { return };
+        if channels < 2 {
             return;
         }
         let frames = (audio.len() / channels).min(MAX_FRAMES);
+        let inp = &mut self.bufs[plan.input];
         for c in 0..2 {
-            let dst = &mut self.buf.inputs[c];
-            dst.resize(frames, 0.0);
-            for (i, d) in dst.iter_mut().enumerate() {
-                *d = audio[i * channels + c];
-            }
-            self.buf.outputs[c].resize(frames, 0.0);
+            inp[c].clear();
+            inp[c].extend((0..frames).map(|i| audio[i * channels + c]));
         }
-        self.buf.block_size = frames;
-        for p in &self.plugins {
-            // janela usando o plugin agora? pula só este plugin neste bloco
-            let Ok(mut g) = p.try_lock() else { continue };
-            if g.process_audio(&mut self.buf).is_ok() {
-                std::mem::swap(&mut self.buf.inputs, &mut self.buf.outputs);
-            }
-        }
+        crate::graph::run(plan, &mut self.bufs, frames, &mut self.procs);
+        let out = &self.bufs[plan.output];
         for c in 0..2 {
-            for (i, v) in self.buf.inputs[c].iter().enumerate() {
-                audio[i * channels + c] = if v.is_finite() { *v } else { 0.0 };
+            for i in 0..frames {
+                audio[i * channels + c] = out[c][i];
             }
         }
     }

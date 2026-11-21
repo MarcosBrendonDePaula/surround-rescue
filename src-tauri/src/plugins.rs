@@ -20,6 +20,9 @@ fn yes() -> bool {
 pub struct Chain {
     #[serde(default)]
     pub plugins: Vec<PluginEntry>,
+    /// Fluxo do editor (nós e setas); ausente = fila na ordem da lista. O app só repassa.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub graph: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -150,7 +153,10 @@ mod tests {
         let dir = std::env::temp_dir().join("sr-chain-test");
         std::env::set_var("ProgramData", &dir);
         let ep = "{11111111-2222-3333-4444-555555555555}";
-        let c = Chain { plugins: vec![PluginEntry { path: "C:\\x.vst3".into(), enabled: false }] };
+        let c = Chain {
+            plugins: vec![PluginEntry { path: "C:\\x.vst3".into(), enabled: false }],
+            graph: Some(serde_json::json!({ "nodes": [{ "id": "in", "kind": "input" }], "edges": [] })),
+        };
         set_chain(ep, &c).unwrap();
         assert_eq!(get_chain(ep).unwrap(), c);
         set_chain(ep, &Chain::default()).unwrap();

@@ -377,6 +377,20 @@ async function plScan() {
     : `<option value="">Nenhum VST3 encontrado nas pastas padrão</option>`;
 }
 
+/// Lista só edita a estrutura quando o fluxo é uma fila simples (aí o desenho vira fila de novo).
+function plListEditable() {
+  return typeof isSerial !== "function" || isSerial(PL.chain.graph, PL.chain.plugins.length);
+}
+function plListEdit() {
+  if (!plListEditable()) {
+    $("#error").textContent = "Este dispositivo tem um fluxo com caminhos paralelos. Edite pela aba Fluxo (ou use 'Organizar em fila' lá).";
+    $("#error").hidden = false;
+    return false;
+  }
+  PL.chain.graph = null;
+  return true;
+}
+
 function plRender() {
   const list = PL.chain.plugins;
   const rows = list.map((p, i) => `
@@ -391,7 +405,9 @@ function plRender() {
         <button data-pl-del="${i}" title="Remover">×</button>
       </div>
     </li>`).join("");
-  $("#pl-chain").innerHTML = (rows || `<li class="fixed empty-row"><span></span><span class="empty">Nenhum plugin ainda. Adicione um abaixo.</span></li>`) +
+  const locked = !plListEditable();
+  $("#pl-chain").classList.toggle("locked", locked);
+  $("#pl-chain").innerHTML = (locked ? `<li class="fixed empty-row"><span></span><span class="chain-locked">Fluxo com caminhos paralelos: a ordem e as ligações são editadas na aba Fluxo.</span></li>` : "") + (rows || `<li class="fixed empty-row"><span></span><span class="empty">Nenhum plugin ainda. Adicione um abaixo.</span></li>`) +
     `<li class="fixed"><span></span><div><div class="pname">Surround Rescue</div><div class="ppath">surround, equalizador e anti-estouro (sempre por último)</div></div></li>`;
   invoke("host_status").then((h) => {
     $("#pl-engine").textContent = !h.found
@@ -414,12 +430,14 @@ function plBind() {
   $("#pl-add").addEventListener("click", () => {
     const f = PL.found[Number($("#pl-found").value)];
     if (!f) return;
+    if (!plListEdit()) return;
     PL.chain.plugins.push({ path: f.path, enabled: true });
     plSave();
   });
   $("#pl-add-path").addEventListener("click", () => {
     const p = $("#pl-path").value.trim().replace(/^"|"$/g, "");
     if (!/\.vst3$/i.test(p)) { $("#error").textContent = "Informe o caminho de um arquivo ou pasta .vst3."; $("#error").hidden = false; return; }
+    if (!plListEdit()) return;
     PL.chain.plugins.push({ path: p, enabled: true });
     $("#pl-path").value = "";
     plSave();
@@ -434,6 +452,7 @@ function plBind() {
       return;
     }
     const i = Number(t.dataset.plUp ?? t.dataset.plDown ?? t.dataset.plDel);
+    if (!plListEdit()) return;
     if (t.dataset.plUp !== undefined && i > 0) [L[i - 1], L[i]] = [L[i], L[i - 1]];
     else if (t.dataset.plDown !== undefined && i < L.length - 1) [L[i + 1], L[i]] = [L[i], L[i + 1]];
     else if (t.dataset.plDel !== undefined) L.splice(i, 1);
@@ -462,6 +481,7 @@ function plBind() {
     e.preventDefault();
     const to = Number(li.dataset.plIdx);
     if (to !== dragFrom) {
+      if (!plListEdit()) return;
       const [moved] = PL.chain.plugins.splice(dragFrom, 1);
       PL.chain.plugins.splice(to, 0, moved);
       plSave();

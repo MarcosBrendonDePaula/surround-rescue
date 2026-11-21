@@ -65,3 +65,11 @@ A lógica de áudio (`eqapo.rs`) já está isolada do motor para permitir a troc
 - App: aba Plugins (dispositivo, adicionar da varredura ou por caminho, ligar/desligar, reordenar, remover);
   sobe o executor quando há cadeias; grava `engine\{guid}.json` para o APO próprio.
 - Falta: janela (editor) do plugin, teste no Kraken com o APO próprio, empacotar sr-apo/sr-host no instalador.
+
+## Editor de fluxo (2026-11-21, tarde)
+- Grafo no arquivo de cadeia (`graph`: nós in/out/mixer/plugin + setas com ganho). Ausente = fila de `plugins`.
+- Cada nó soma as entradas (com ganho); ordenação topológica; ciclo = fluxo recusado (passa direto). 8 testes.
+- Aba Fluxo: arrastar caixas, puxar setas entre portas, volume por seta, mixer, duplo clique abre janela,
+  Delete remove, "Organizar em fila". Lista vira só leitura quando o fluxo não é fila.
+- Ponta a ponta com fluxo paralelo: processado pelo executor (0,15 ms ida e volta).
+- Ainda sem compensação de latência entre ramos (plugins com latência podem defasar caminhos paralelos).
