@@ -24,6 +24,8 @@ struct AppState {
     last_text: Mutex<String>,
     /// Programas vistos em primeiro plano (sugestões na aba PERFIS)
     seen: Mutex<std::collections::BTreeSet<String>>,
+    /// Teste de calibração tocando agora (−1 = nenhum)
+    test: Mutex<i32>,
 }
 
 fn config_path() -> std::path::PathBuf {
@@ -53,7 +55,8 @@ fn apply_now(state: &AppState) -> Result<String, String> {
             state.seen.lock().unwrap().insert(e.clone());
         }
     }
-    let profile = cfg.resolve(fg.as_deref()).clone();
+    let mut profile = cfg.resolve(fg.as_deref()).clone();
+    profile.settings.test_speaker = *state.test.lock().unwrap();
     let hp = system::pick(&devices::list("Render"), cfg.output_device.as_deref());
     let mic = system::pick(&devices::list("Capture"), cfg.input_device.as_deref());
     // motor próprio ativo: o Equalizer APO fica em "passa direto" para o efeito não sair em dobro
@@ -65,7 +68,7 @@ fn apply_now(state: &AppState) -> Result<String, String> {
     };
     let out = eqapo::generate(&profile.settings);
     let mic_txt = eqapo::generate_mic(&cfg.mic);
-    let joined = format!("{root}\0{out}\0{mic_txt}");
+    let joined = format!("{root}\0{out}\0{mic_txt}\0{}", profile.settings.test_speaker);
     let mut last = state.last_text.lock().unwrap();
     if *last != joined {
         system::apply(&root, &out, &mic_txt)?;
@@ -109,6 +112,13 @@ fn snapshot(state: &AppState) -> Snapshot {
         applied: state.applied.lock().unwrap().clone(),
         eq_presets: eqapo::eq_presets().into_iter().map(|(a, b, c)| (a.into(), b.into(), c)).collect(),
     }
+}
+
+/// Toca o som de teste numa caixa virtual (0..6), em todas (7) ou para (−1). Só no motor próprio.
+#[tauri::command]
+fn engine_test(speaker: i32, state: State<AppState>) -> Result<(), String> {
+    *state.test.lock().unwrap() = speaker.clamp(-1, 7);
+    apply_now(&state).map(|_| ())
 }
 
 #[tauri::command]
@@ -299,7 +309,7 @@ fn main() {
     if let Some(code) = engine::handle_cli(&args) {
         std::process::exit(code);
     }
-    let state = AppState { config: Mutex::new(load()), applied: Mutex::new(String::new()), last_text: Mutex::new(String::new()), seen: Mutex::new(Default::default()) };
+    let state = AppState { config: Mutex::new(load()), applied: Mutex::new(String::new()), last_text: Mutex::new(String::new()), seen: Mutex::new(Default::default()), test: Mutex::new(-1) };
     // Reaplica na inicialização: garante o estado salvo mesmo após reinício.
     let _ = apply_now(&state);
 
@@ -307,7 +317,7 @@ fn main() {
         .plugin(tauri_plugin_single_instance::init(|app, _, _| show(app)))
         .manage(state)
         .manage(plugins::HostProcess(Mutex::new(None)))
-        .invoke_handler(tauri::generate_handler![get_snapshot, set_config, get_status, set_device_engine, set_autostart, preview, recent_apps, scan_plugins, get_chain, set_chain, host_status, open_plugin_window, audio_apps, list_flows, get_flow, set_flow, delete_flow, get_stats, plugin_env, engine_devices, set_engine, get_levels, check_update, install_update])
+        .invoke_handler(tauri::generate_handler![engine_test, get_snapshot, set_config, get_status, set_device_engine, set_autostart, preview, recent_apps, scan_plugins, get_chain, set_chain, host_status, open_plugin_window, audio_apps, list_flows, get_flow, set_flow, delete_flow, get_stats, plugin_env, engine_devices, set_engine, get_levels, check_update, install_update])
         .setup(|app| {
             let show_i = MenuItem::with_id(app, "show", "Abrir", true, None::<&str>)?;
             let toggle_i = MenuItem::with_id(app, "toggle", "Ligar/Desligar surround", true, None::<&str>)?;

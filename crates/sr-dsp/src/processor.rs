@@ -81,6 +81,10 @@ pub struct Processor {
     virt: Virtualizer,
     upmix: Upmix,
     upmix_on: bool,
+    test: i32,
+    test_n: u64,
+    test_seed: u32,
+    test_lp: f64,
     bass: BassBoost,
     filters: [[Biquad; 13]; 2],
     n_filters: usize,
@@ -101,6 +105,10 @@ impl Processor {
             virt: Virtualizer::new(sr),
             upmix: Upmix::new(sr),
             upmix_on: false,
+            test: -1,
+            test_n: 0,
+            test_seed: 1,
+            test_lp: 0.0,
             bass: BassBoost::new(sr),
             filters: [[Biquad::default(); 13]; 2],
             n_filters: 0,
@@ -133,7 +141,11 @@ impl Processor {
         self.pre.target = db_to_lin(s.volume_db - headroom);
         self.width.target = s.width();
         self.vmix.target = if s.spatial > 0.0 { 1.0 } else { 0.0 };
-        self.virt.set(s.front_angle);
+        self.virt.set_angles(s.front_angle, s.side_angle, s.rear_angle);
+        if s.test_speaker != self.test {
+            self.test_n = 0;
+        }
+        self.test = s.test_speaker;
         // 0..100: 50 = ambiente padrão; 100 = o dobro
         self.virt.amb_gain = s.spatial / 50.0;
         self.virt.room_gain = s.spatial / 50.0;
@@ -204,6 +216,13 @@ impl Processor {
         l = m + w * s;
         r = m - w * s;
 
+        // calibração: ruído em rajadas numa caixa só (o som do sistema fica mudo enquanto isso)
+        if self.test >= 0 {
+            let (vl, vr) = self.test_tick();
+            let lim = self.limiter.process(vl, vr);
+            return (lim.0 as f32, lim.1 as f32);
+        }
+
         // surround 7.1 virtual (liga/desliga com transição suave)
         let k = self.vmix.next();
         if k > 1e-4 {
@@ -249,6 +268,30 @@ impl Processor {
         }
         let (l, r) = self.limiter.process(l, r);
         (l as f32, r as f32)
+    }
+
+    /// Uma amostra do teste de calibração: rajadas de ruído (250 ms ligado, 150 ms desligado),
+    /// com subida/descida de 5 ms para não estalar. `test` = 7 passa por todas as caixas (1,2 s cada).
+    fn test_tick(&mut self) -> (f64, f64) {
+        let sr = self.sr;
+        let n = self.test_n;
+        self.test_n += 1;
+        let spk = if self.test == 7 {
+            const ORDER: [usize; 7] = [2, 1, 4, 6, 5, 3, 0]; // centro, frente D, lateral D, trás D, trás E, lateral E, frente E
+            ORDER[((n as f64 / (1.2 * sr)) as usize) % 7]
+        } else {
+            self.test as usize
+        };
+        let period = (0.4 * sr) as u64;
+        let t = (n % period) as f64 / sr;
+        let env = if t < 0.25 { (t / 0.005).min(1.0).min((0.25 - t) / 0.005) } else { 0.0 };
+        self.test_seed = self.test_seed.wrapping_mul(1664525).wrapping_add(1013904223);
+        let white = (self.test_seed >> 8) as f64 / 16777216.0 * 2.0 - 1.0;
+        // ruído um pouco mais escuro (menos chiado no agudo, mais fácil de localizar)
+        self.test_lp = white + 0.3 * (self.test_lp - white);
+        let mut ch = [0.0; crate::surround::SPEAKERS];
+        ch[spk] = 0.18 * env * self.test_lp;
+        self.virt.render(ch, 0.0)
     }
 
     /// Processa canais separados (formato de VST3/CLAP).

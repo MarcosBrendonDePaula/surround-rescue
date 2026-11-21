@@ -1,6 +1,7 @@
 //! Reforço de graves em duas partes, como o do Nahimic (compressor de graves + "VirtualBassBoost"):
 //! 1. separa os graves (abaixo de 120 Hz) com um divisor Linkwitz-Riley (a soma não muda o som);
-//! 2. os graves passam por um compressor próprio antes de ganhar volume: batida forte não "estoura";
+//! 2. o reforço é inteiro com graves normais e vai diminuindo só quando o graves já está muito forte
+//!    (nunca abaixa o graves original): batida forte não "estoura";
 //! 3. gera harmônicos dos graves (120–400 Hz): o ouvido "completa" a nota grave, então o graves parece
 //!    mais forte sem empurrar tanta energia (o fone não distorce e o limitador quase não age).
 
@@ -38,7 +39,7 @@ impl BassBoost {
             env: 0.0,
             att: k(8.0),
             rel: k(150.0),
-            thr: 10f64.powf(-24.0 / 20.0),
+            thr: 10f64.powf(-12.0 / 20.0),
             gain: 1.0,
             harm: 0.0,
             on: false,
@@ -48,8 +49,8 @@ impl BassBoost {
     /// `db`: reforço total desejado (0 desliga). Metade vira ganho real, o resto vira harmônicos.
     pub fn set(&mut self, db: f64) {
         self.on = db > 0.0;
-        self.gain = 10f64.powf(0.6 * db / 20.0);
-        self.harm = (db / 7.0).clamp(0.0, 1.0) * 0.6;
+        self.gain = db.max(0.0); // aqui guarda o reforço em dB
+        self.harm = (db / 7.0).clamp(0.0, 1.0) * 0.35;
     }
 
     #[inline]
@@ -70,8 +71,10 @@ impl BassBoost {
         let p = lo[0].abs().max(lo[1].abs());
         let k = if p > self.env { self.att } else { self.rel };
         self.env = p + k * (self.env - p);
-        let over = (self.env * self.gain / self.thr).max(1.0);
-        let g = self.gain * over.powf(-2.0 / 3.0); // 3:1 acima do limiar
+        // acima de −12 dBFS o reforço some aos poucos (zero 12 dB acima); abaixo, reforço inteiro
+        let over_db = if self.env > self.thr { 20.0 * (self.env / self.thr).log10() } else { 0.0 };
+        let boost = self.gain * (1.0 - over_db / 12.0).clamp(0.0, 1.0);
+        let g = 10f64.powf(boost / 20.0);
         let mut out = [0.0; 2];
         for c in 0..2 {
             let b = lo[c] * g;
@@ -116,7 +119,9 @@ mod tests {
         let quiet = run(&mut b, 0.02);
         let loud = run(&mut b, 0.8);
         assert!(quiet > 3.0, "grave baixo subiu só {quiet:.1} dB");
+        assert!(quiet > 6.0, "grave normal deveria ganhar o reforço inteiro ({quiet:.1} dB)");
         assert!(loud < quiet - 3.0, "grave forte deveria subir bem menos ({loud:.1} dB)");
+        assert!(loud > -0.5, "nunca abaixa o graves original ({loud:.1} dB)");
     }
 
     #[test]

@@ -3,7 +3,7 @@ const { listen } = window.__TAURI__.event;
 
 const EQ_FREQS = ["31", "63", "125", "250", "500", "1K", "2K", "4K", "8K", "16K"];
 const FMT = {
-  front_angle: (v) => `${v}°`, spatial: (v) => `${v}`, volume_db: (v) => `${v > 0 ? "+" : ""}${v} dB`,
+  front_angle: (v) => `${v}°`, side_angle: (v) => `${v}°`, rear_angle: (v) => `${v}°`, spatial: (v) => `${v}`, volume_db: (v) => `${v > 0 ? "+" : ""}${v} dB`,
   gain_db: (v) => `${v > 0 ? "+" : ""}${v} dB`,
   nr_db: (v) => `−${v} dB`, gate_db: (v) => `${v} dB`,
 };
@@ -84,67 +84,93 @@ const R = 112;
 const NAMES = { C: "Centro", FL: "Frente esq.", FR: "Frente dir.", SL: "Lateral esq.", SR: "Lateral dir.", RL: "Trás esq.", RR: "Trás dir." };
 const pos = (deg, r = R) => { const t = (deg * Math.PI) / 180; return [Math.sin(t) * r, -Math.cos(t) * r]; };
 
+// índice de cada caixa no motor (FL FR C SL SR BL BR) e qual ângulo ela usa
+const SPK = { FL: [0, "front_angle", -1], FR: [1, "front_angle", 1], C: [2, null, 0], SL: [3, "side_angle", -1], SR: [4, "side_angle", 1], RL: [5, "rear_angle", -1], RR: [6, "rear_angle", 1] };
+const LIMITS = { front_angle: [10, 80], side_angle: [60, 120], rear_angle: [110, 175] };
+const spkDeg = (s, id) => { const [, k, sign] = SPK[id]; return k ? sign * s[k] : 0; };
+let testing = null; // caixa tocando o teste ("ALL" = dando a volta)
+let testTimer = null;
+
 function drawStage(s) {
   const a = s.front_angle;
-  const spk = [["C", 0, false], ["FL", -a, true], ["FR", a, true], ["SL", -90, false], ["SR", 90, false], ["RL", -150, false], ["RR", 150, false]];
   let svg = `<circle class="floor" r="${R + 30}"/>`;
   svg += `<circle class="orbit" r="${R * 0.45}"/><circle class="orbit main" r="${R}"/>`;
   for (let d = 0; d < 360; d += 15) {
     const [x1, y1] = pos(d, R + 22), [x2, y2] = pos(d, R + (d % 45 ? 26 : 30));
     svg += `<line class="tick" x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}"/>`;
   }
-  // feixe entre as duas caixas frontais (a "imagem" estéreo)
   const [lx, ly] = pos(-a), [rx, ry] = pos(a);
   svg += `<path class="beam" d="M0 0 L${lx} ${ly} A${R} ${R} 0 0 1 ${rx} ${ry} Z"/>`;
   svg += `<g id="waves"></g>`;
-  for (const [id, deg, active] of spk) {
+  for (const id of Object.keys(SPK)) {
+    const deg = spkDeg(s, id);
     const [x, y] = pos(deg);
+    const on = testing === id;
     svg += `<g class="spkg" data-spk="${id}" transform="translate(${x} ${y}) rotate(${deg})">
-      <title>${NAMES[id]}${active ? " — arraste para ajustar" : " — disponível no 7.1"}</title>
-      <rect class="spk${active ? " on" : ""}" x="-11" y="-9" width="22" height="18" rx="5"/></g>`;
+      <title>${NAMES[id]} (${Math.round(Math.abs(deg))}°) — clique para ouvir${SPK[id][1] ? ", arraste para ajustar" : ""}</title>
+      <rect class="spk on${on ? " playing" : ""}" x="-11" y="-9" width="22" height="18" rx="5"/></g>`;
     const [tx, ty] = pos(deg, R - 24);
-    svg += `<text class="lbl${active ? " on" : ""}" x="${tx}" y="${ty + 3}">${id}</text>`;
+    svg += `<text class="lbl on" x="${tx}" y="${ty + 3}">${id}</text>`;
   }
-  // cabeça vista de cima
   svg += `<ellipse class="head" cx="0" cy="2" rx="17" ry="20"/><ellipse class="head" cx="-18" cy="2" rx="4" ry="7"/><ellipse class="head" cx="18" cy="2" rx="4" ry="7"/>`;
   svg += `<path class="nose" d="M-5 -19 L0 -27 L5 -19 Z"/>`;
   svg += `<text class="angle" x="0" y="${R * 0.45 + 18}">${Math.round(a * 2)}° de abertura</text>`;
   $("#stage").innerHTML = svg;
 }
 
-// arrastar as caixas frontais muda o ângulo
+// teste de calibração pelo motor (para sozinho depois de 30 s)
+async function engineTest(id) {
+  clearTimeout(testTimer);
+  testing = id;
+  const n = id === null ? -1 : id === "ALL" ? 7 : SPK[id][0];
+  try { await invoke("engine_test", { speaker: n }); } catch (e) { $("#error").textContent = String(e); $("#error").hidden = false; }
+  $("#test-stop").hidden = id === null;
+  $("#test-round").hidden = id !== null;
+  if (id !== null) testTimer = setTimeout(() => engineTest(null), 30000);
+  drawStage(cur());
+  if (id && id !== "ALL") emitWaves([id]);
+}
+
+// clicar toca o teste; arrastar muda o ângulo do par (esquerda e direita juntas)
 function bindStageDrag() {
   const stage = $("#stage");
-  let dragging = false;
-  const toAngle = (ev) => {
+  let drag = null;
+  const toDeg = (ev) => {
     const pt = stage.createSVGPoint(); pt.x = ev.clientX; pt.y = ev.clientY;
     const p = pt.matrixTransform(stage.getScreenCTM().inverse());
-    const deg = Math.abs((Math.atan2(p.x, -p.y) * 180) / Math.PI);
-    return Math.round(Math.min(90, Math.max(10, deg)));
+    return Math.abs((Math.atan2(p.x, -p.y) * 180) / Math.PI);
   };
   stage.addEventListener("pointerdown", (ev) => {
     const g = ev.target.closest("[data-spk]");
-    if (!g || !["FL", "FR"].includes(g.dataset.spk)) return;
-    dragging = true; stage.setPointerCapture(ev.pointerId);
+    if (!g) return;
+    drag = { id: g.dataset.spk, moved: false, x: ev.clientX, y: ev.clientY };
+    stage.setPointerCapture(ev.pointerId);
   });
   stage.addEventListener("pointermove", (ev) => {
-    if (!dragging) return;
-    const v = toAngle(ev);
-    if (v !== cur().front_angle) { cur().front_angle = v; render(); saveSoon(); }
+    if (!drag) return;
+    const key = SPK[drag.id][1];
+    if (!key) return;
+    if (!drag.moved && Math.hypot(ev.clientX - drag.x, ev.clientY - drag.y) < 4) return;
+    drag.moved = true;
+    const [lo, hi] = LIMITS[key];
+    const v = Math.round(Math.min(hi, Math.max(lo, toDeg(ev))));
+    if (v !== cur()[key]) { cur()[key] = v; render(); saveSoon(); }
   });
-  const end = () => { dragging = false; };
+  const end = () => {
+    if (drag && !drag.moved) engineTest(testing === drag.id ? null : drag.id);
+    else if (drag && testing !== drag.id) engineTest(drag.id); // ajustou: toca essa caixa para conferir
+    drag = null;
+  };
   stage.addEventListener("pointerup", end);
-  stage.addEventListener("pointercancel", end);
+  stage.addEventListener("pointercancel", () => { drag = null; });
 }
 
 // ondas saindo das caixas que estão tocando o teste
 function emitWaves(ids) {
   if (matchMedia("(prefers-reduced-motion: reduce)").matches) return;
   const g = $("#waves"); if (!g) return;
-  const a = cur().front_angle;
-  const deg = { FL: -a, FR: a };
   for (const id of ids) {
-    const [x, y] = pos(deg[id]);
+    const [x, y] = pos(spkDeg(cur(), id));
     for (let k = 0; k < 3; k++) {
       const c = document.createElementNS("http://www.w3.org/2000/svg", "circle");
       c.setAttribute("class", "wave"); c.setAttribute("cx", x); c.setAttribute("cy", y); c.setAttribute("r", 12);
@@ -331,9 +357,9 @@ function bind() {
   });
 
   // testes
-  $("#test-left").addEventListener("click", () => { testTone(-1); emitWaves(["FL"]); });
-  $("#test-right").addEventListener("click", () => { testTone(1); emitWaves(["FR"]); });
-  $("#test-both").addEventListener("click", () => { testTone(0); emitWaves(["FL", "FR"]); });
+  $("#test-round").addEventListener("click", () => engineTest("ALL"));
+  $("#test-stop").addEventListener("click", () => engineTest(null));
+  window.addEventListener("beforeunload", () => { if (testing) invoke("engine_test", { speaker: -1 }); });
   bindStageDrag();
 
   listen("snapshot", (e) => { snap = e.payload; render(); });

@@ -94,6 +94,9 @@ impl SrParams {
         Settings {
             enabled: self.enabled.value(),
             front_angle: self.front_angle.value() as f64,
+            side_angle: 90.0,
+            rear_angle: 150.0,
+            test_speaker: -1,
             spatial: self.spatial.value() as f64,
             stereo_enhanced: self.stereo_enhanced.value(),
             bass_enabled: bass > 0.0,

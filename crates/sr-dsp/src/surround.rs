@@ -185,8 +185,13 @@ impl Virtualizer {
     /// `front_angle`: ângulo das caixas da frente (a Razer usa 30°). Não chamar no meio do áudio
     /// com frequência: recalcula as respostas (barato, sem alocação).
     pub fn set(&mut self, front_angle: f64) {
-        let fa = front_angle.clamp(10.0, 60.0);
-        let az = [-fa, fa, 0.0, -90.0, 90.0, -150.0, 150.0];
+        self.set_angles(front_angle, 90.0, 150.0);
+    }
+
+    /// Ângulos de cada par de caixas (frente, laterais, traseiras), como a calibração da Razer.
+    pub fn set_angles(&mut self, front: f64, side: f64, rear: f64) {
+        let (fa, sa, ra) = (front.clamp(10.0, 80.0), side.clamp(60.0, 120.0), rear.clamp(110.0, 175.0));
+        let az = [-fa, fa, 0.0, -sa, sa, -ra, ra];
         for (i, a) in az.iter().enumerate() {
             let (l, r, n) = hrir_at(*a, self.sr);
             self.ir[i] = [l, r];

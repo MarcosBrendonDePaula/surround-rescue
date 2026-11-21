@@ -30,6 +30,13 @@ pub struct Settings {
     // ---- CALIBRAÇÃO ----
     /// Ângulo das caixas frontais em graus (Razer: AngleFrontLeft = 30)
     pub front_angle: f64,
+    /// Ângulo das caixas laterais (Razer: 90)
+    pub side_angle: f64,
+    /// Ângulo das caixas traseiras (Razer: 150)
+    pub rear_angle: f64,
+    /// Teste de calibração: −1 = desligado; 0..6 = toca ruído só nessa caixa (FL FR C SL SR BL BR);
+    /// 7 = dá a volta por todas. Não é salvo no perfil (o app liga e desliga).
+    pub test_speaker: i32,
     /// Intensidade do som surround virtual 0..=100
     pub spatial: f64,
     // ---- ÁUDIO ----
@@ -58,6 +65,9 @@ impl Default for Settings {
         Settings {
             enabled: true,
             front_angle: 30.0,
+            side_angle: 90.0,
+            rear_angle: 150.0,
+            test_speaker: -1,
             spatial: 50.0,
             stereo_enhanced: false,
             bass_enabled: true,
@@ -95,7 +105,10 @@ fn clamp(v: f64, lo: f64, hi: f64) -> f64 {
 impl Settings {
     pub fn sanitized(&self) -> Settings {
         let mut s = self.clone();
-        s.front_angle = clamp(s.front_angle, 10.0, 90.0);
+        s.front_angle = clamp(s.front_angle, 10.0, 80.0);
+        s.side_angle = clamp(s.side_angle, 60.0, 120.0);
+        s.rear_angle = clamp(s.rear_angle, 110.0, 175.0);
+        s.test_speaker = s.test_speaker.clamp(-1, 7);
         s.spatial = clamp(s.spatial, 0.0, 100.0);
         s.bass_level = clamp(s.bass_level, 0.0, 100.0);
         s.normalization_level = clamp(s.normalization_level, 0.0, 100.0);

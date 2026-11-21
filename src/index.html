@@ -45,24 +45,31 @@
       <section id="tab-calibracao" class="tab active">
         <div class="stage-wrap">
           <svg id="stage" viewBox="-150 -150 300 300" aria-label="Posição das caixas virtuais em volta da sua cabeça"></svg>
-          <p class="stage-hint">Arraste as caixas da frente até o som parecer vir delas</p>
+          <p class="stage-hint">Clique numa caixa para ouvir o teste. Arraste até o som parecer vir de lá.</p>
         </div>
         <div class="stage-side">
           <h1>Campo de som</h1>
           <div class="field">
-            <div class="flabel"><span>Abertura das caixas</span><output data-o="front_angle"></output></div>
-            <input type="range" data-s="front_angle" min="10" max="90" step="1">
+            <div class="flabel"><span>Caixas da frente</span><output data-o="front_angle"></output></div>
+            <input type="range" data-s="front_angle" min="10" max="80" step="1">
+          </div>
+          <div class="field">
+            <div class="flabel"><span>Caixas laterais</span><output data-o="side_angle"></output></div>
+            <input type="range" data-s="side_angle" min="60" max="120" step="1">
+          </div>
+          <div class="field">
+            <div class="flabel"><span>Caixas de trás</span><output data-o="rear_angle"></output></div>
+            <input type="range" data-s="rear_angle" min="110" max="175" step="1">
           </div>
           <div class="field">
             <div class="flabel"><span>Intensidade do surround</span><output data-o="spatial"></output></div>
             <input type="range" data-s="spatial" min="0" max="100" step="1">
           </div>
           <div class="testers">
-            <button class="pill" id="test-left">◀ Esquerda</button>
-            <button class="pill" id="test-both">Centro</button>
-            <button class="pill" id="test-right">Direita ▶</button>
+            <button class="pill" id="test-round">Dar a volta</button>
+            <button class="pill" id="test-stop" hidden>Parar o teste</button>
           </div>
-          <p class="note">Por enquanto o som vem em estéreo, então só as duas caixas da frente são virtuais. Centro, laterais e traseiras chegam com o 7.1.</p>
+          <p class="note">O teste toca pelo motor instalado no fone, com o mesmo processamento do som do Windows. Enquanto toca, o resto do som fica mudo.</p>
         </div>
       </section>
 

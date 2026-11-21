@@ -463,3 +463,7 @@ pre { white-space: pre-wrap; font-size: 11.5px; color: var(--soft); background: 
 /* aviso de atualização no menu */
 #tabs button.has-update { position: relative; }
 #tabs button.has-update::after { content: ""; position: absolute; top: 9px; left: 26px; width: 8px; height: 8px; border-radius: 50%; background: var(--amber); }
+
+/* calibração: caixa tocando o teste */
+#stage .spk.playing { fill: var(--amber); stroke: var(--amber); }
+#stage .spkg { cursor: pointer; }
