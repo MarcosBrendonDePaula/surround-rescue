@@ -344,6 +344,7 @@ async function init() {
   render();
   refreshStatus();
   plDirsBind();
+  enBind();
 }
 
 init();
@@ -414,6 +415,42 @@ function plDirsRender() {
   $("#cf-total").textContent = PL.found.length
     ? `${PL.found.length} plugins encontrados (${PL.found.filter((f) => f.supported !== false).length} utilizáveis).`
     : "Clique em Procurar de novo para contar os plugins.";
+}
+
+// ---------- motor nos dispositivos ----------
+let EN = [];
+async function enLoad() {
+  try { EN = await invoke("engine_devices"); } catch (e) { EN = []; $("#en-msg").textContent = String(e); }
+  const row = (d) => `<li><span class="cf-path">${d.flow === "Render" ? "🎧" : "🎙"} ${esc(d.name)} <small>${esc(d.device)}${d.connected ? "" : " · desconectado"}</small></span>
+    ${d.engine ? `<span class="tag on">● instalado</span><button class="pill" data-en-off="${d.flow}:${d.id}">Remover</button>`
+               : `<span class="tag">não instalado</span><button class="pill solid" data-en-on="${d.flow}:${d.id}">Instalar</button>`}</li>`;
+  $("#en-list").innerHTML = EN.length ? EN.map(row).join("") : `<li class="cf-empty">Nenhum dispositivo de áudio encontrado.</li>`;
+}
+async function enSet(on, items) {
+  if (!items.length) return;
+  $("#en-msg").textContent = on ? "Instalando… aceite o pedido de administrador. O som volta em alguns segundos." : "Removendo… aceite o pedido de administrador.";
+  $$("#en-list button, #en-all, #en-none").forEach((b) => (b.disabled = true));
+  try {
+    await invoke("set_engine", { on, items: items.map((s) => s.split(/:(.*)/s).slice(0, 2)) });
+    $("#en-msg").textContent = on ? "Pronto: motor instalado." : "Pronto: motor removido e o efeito original devolvido.";
+  } catch (e) {
+    $("#en-msg").textContent = `Não deu certo: ${e}`;
+  }
+  $$("#en-all, #en-none").forEach((b) => (b.disabled = false));
+  await enLoad();
+}
+function enBind() {
+  if (!$("#en-list")) return;
+  $("#en-list").addEventListener("click", (e) => {
+    const on = e.target.closest("[data-en-on]"), off = e.target.closest("[data-en-off]");
+    if (on) enSet(true, [on.dataset.enOn]);
+    if (off) enSet(false, [off.dataset.enOff]);
+  });
+  $("#en-all").addEventListener("click", () => enSet(true, EN.filter((d) => !d.engine).map((d) => `${d.flow}:${d.id}`)));
+  $("#en-none").addEventListener("click", () => enSet(false, EN.filter((d) => d.engine).map((d) => `${d.flow}:${d.id}`)));
+  $("#en-refresh").addEventListener("click", enLoad);
+  $$('#tabs button[data-tab="configuracoes"]').forEach((b) => b.addEventListener("click", enLoad));
+  enLoad();
 }
 
 function plDirsBind() {

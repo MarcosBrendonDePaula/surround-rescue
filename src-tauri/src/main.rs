@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod devices;
+mod engine;
 mod eqapo;
 mod plugins;
 mod profiles;
@@ -184,6 +185,17 @@ fn open_plugin_window(endpoint: String, index: usize, host: State<plugins::HostP
 }
 
 #[tauri::command]
+async fn engine_devices() -> Result<Vec<engine::DevEngine>, String> {
+    tauri::async_runtime::spawn_blocking(engine::list).await.map_err(|e| e.to_string())
+}
+
+/// Instala ou remove o motor próprio nos dispositivos (um pedido de administrador para todos).
+#[tauri::command]
+async fn set_engine(on: bool, items: Vec<(String, String)>) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || engine::apply_elevated(on, &items)).await.map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
 fn plugin_env() -> serde_json::Value {
     serde_json::json!({ "bridge32": plugins::bridge32_installed() })
 }
@@ -254,6 +266,9 @@ fn main() {
     if let Some(code) = devices::handle_cli(&args) {
         std::process::exit(code);
     }
+    if let Some(code) = engine::handle_cli(&args) {
+        std::process::exit(code);
+    }
     let state = AppState { config: Mutex::new(load()), applied: Mutex::new(String::new()), last_text: Mutex::new(String::new()), seen: Mutex::new(Default::default()) };
     // Reaplica na inicialização: garante o estado salvo mesmo após reinício.
     let _ = apply_now(&state);
@@ -262,7 +277,7 @@ fn main() {
         .plugin(tauri_plugin_single_instance::init(|app, _, _| show(app)))
         .manage(state)
         .manage(plugins::HostProcess(Mutex::new(None)))
-        .invoke_handler(tauri::generate_handler![get_snapshot, set_config, get_status, set_device_engine, set_autostart, preview, recent_apps, scan_plugins, get_chain, set_chain, host_status, open_plugin_window, audio_apps, list_flows, get_flow, set_flow, delete_flow, get_stats, plugin_env])
+        .invoke_handler(tauri::generate_handler![get_snapshot, set_config, get_status, set_device_engine, set_autostart, preview, recent_apps, scan_plugins, get_chain, set_chain, host_status, open_plugin_window, audio_apps, list_flows, get_flow, set_flow, delete_flow, get_stats, plugin_env, engine_devices, set_engine])
         .setup(|app| {
             let show_i = MenuItem::with_id(app, "show", "Abrir", true, None::<&str>)?;
             let toggle_i = MenuItem::with_id(app, "toggle", "Ligar/Desligar surround", true, None::<&str>)?;
