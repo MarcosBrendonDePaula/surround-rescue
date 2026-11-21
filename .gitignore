@@ -1,0 +1,6 @@
+# Não versionar binários de terceiros (Razer/Nahimic)
+*.exe
+*.dll
+*.sys
+*.cat
+dumps/
