@@ -109,10 +109,11 @@ pub fn install_plan(flow: &str, fx: &BTreeMap<String, String>) -> (Vec<(String, 
 /// Liga o Equalizer APO no dispositivo. Precisa de administrador.
 pub fn install(flow: &str, id: &str) -> Result<(), String> {
     let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
-    let dev = hklm
-        .open_subkey_with_flags(format!(r"{MMDEV}\{flow}\{id}"), KEY_ALL_ACCESS)
+    // Essas chaves só dão "consultar/gravar valor", nem para administrador: pedir exatamente isso.
+    let dev = hklm.open_subkey(format!(r"{MMDEV}\{flow}\{id}")).map_err(|e| format!("Dispositivo não encontrado: {e}"))?;
+    let fxk = hklm
+        .open_subkey_with_flags(format!(r"{MMDEV}\{flow}\{id}\FxProperties"), KEY_QUERY_VALUE | KEY_SET_VALUE)
         .map_err(|e| format!("Sem permissão para alterar o dispositivo: {e}"))?;
-    let (fxk, _) = dev.create_subkey("FxProperties").map_err(|e| e.to_string())?;
     let fx = read_fx(&dev);
     if has_apo(&fx) {
         return Ok(());
@@ -132,7 +133,7 @@ pub fn install(flow: &str, id: &str) -> Result<(), String> {
 pub fn uninstall(flow: &str, id: &str) -> Result<(), String> {
     let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
     let fxk = hklm
-        .open_subkey_with_flags(format!(r"{MMDEV}\{flow}\{id}\FxProperties"), KEY_ALL_ACCESS)
+        .open_subkey_with_flags(format!(r"{MMDEV}\{flow}\{id}\FxProperties"), KEY_QUERY_VALUE | KEY_SET_VALUE)
         .map_err(|e| format!("Sem permissão para alterar o dispositivo: {e}"))?;
     let child_path = format!(r"{CHILD_ROOT}\{id}");
     let Ok(ck) = hklm.open_subkey(&child_path) else { return Ok(()) };

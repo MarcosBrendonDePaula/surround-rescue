@@ -18,7 +18,6 @@ $src   = Join-Path $repo 'target\release\sr_apo.dll'
 $dst   = 'C:\Program Files\SurroundRescue\apo'
 $clsid = '{5A3E1F0C-6B2D-4C8E-9F17-53A2D0B7E4C1}'
 $eng   = 'C:\ProgramData\SurroundRescue\engine'
-$fx    = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\MMDevices\Audio\$Flow\$Endpoint\FxProperties"
 $efx   = '{d04e05a6-594b-4fb6-a80d-01af5eed7d1d},15'
 $bak   = Join-Path $eng "backup-$($Endpoint.ToLower()).json"
 
@@ -33,12 +32,19 @@ Copy-Item $src "$dst\sr_apo.dll" -Force
 & regsvr32.exe /s "$dst\sr_apo.dll"
 if ($LASTEXITCODE -ne 0) { throw "regsvr32 falhou ($LASTEXITCODE)" }
 
-$cur = (Get-ItemProperty -LiteralPath $fx -ErrorAction SilentlyContinue).$efx
+# Essas chaves só permitem "consultar/gravar valor" (nem administrador tem acesso total):
+# abrimos pedindo exatamente isso.
+$sub = "SOFTWARE\Microsoft\Windows\CurrentVersion\MMDevices\Audio\$Flow\$Endpoint\FxProperties"
+$rights = [Security.AccessControl.RegistryRights]'QueryValues, SetValue'
+$key = [Microsoft.Win32.Registry]::LocalMachine.OpenSubKey($sub, [Microsoft.Win32.RegistryKeyPermissionCheck]::ReadWriteSubTree, $rights)
+if (-not $key) { throw "Dispositivo não encontrado: $Endpoint" }
+$cur = $key.GetValue($efx)
 if (-not (Test-Path $bak)) {
   @{ endpoint = $Endpoint; flow = $Flow; key = $efx; existed = ($null -ne $cur); value = @($cur) } | ConvertTo-Json | Set-Content $bak -Encoding utf8
 }
 $list = @($cur | Where-Object { $_ -and $_ -ne $clsid }) + $clsid
-New-ItemProperty -LiteralPath $fx -Name $efx -PropertyType MultiString -Value $list -Force | Out-Null
+$key.SetValue($efx, [string[]]$list, [Microsoft.Win32.RegistryValueKind]::MultiString)
+$key.Close()
 
 Restart-Service Audiosrv -Force
 "OK. Cadeia EFX agora: $($list -join ' -> ')"
