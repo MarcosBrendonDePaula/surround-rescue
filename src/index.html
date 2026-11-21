@@ -43,6 +43,7 @@
       <button data-tab="configuracoes" class="tab-settings"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M5.6 18.4l2.1-2.1M16.3 7.7l2.1-2.1"/></svg>Configurações</button>
     </nav>
     <div class="ver">
+      <button class="ver-guide" id="guide-open">Guia de início</button>
       <span id="ver-text">Versão …</span>
       <button class="ver-up" id="ver-up" hidden>Atualizar</button>
     </div>
@@ -364,8 +365,24 @@
     </div>
   </div>
 </div>
+<!-- GUIA DE INÍCIO -->
+<div class="gd-back" id="guide" hidden>
+  <div class="gd" role="dialog" aria-modal="true" aria-labelledby="gd-title">
+    <ol class="gd-steps" id="gd-steps"></ol>
+    <div class="gd-main">
+      <button class="icon gd-x" id="gd-close" title="Fechar o guia">×</button>
+      <h2 id="gd-title"></h2>
+      <div id="gd-body"></div>
+      <div class="gd-nav">
+        <button class="pill" id="gd-back">Voltar</button>
+        <button class="pill solid" id="gd-next">Continuar</button>
+      </div>
+    </div>
+  </div>
+</div>
 <script src="main.js"></script>
 <script src="flow.js"></script>
 <script src="browser.js"></script>
+<script src="guide.js"></script>
 </body>
 </html>

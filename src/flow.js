@@ -420,6 +420,11 @@ function flPanel() {
 }
 
 // ---------- mesa de som ----------
+/// Nível de uma caixa: [esquerdo, direito] (versões antigas do executor mandavam um número só).
+const lvLR = (v) => (Array.isArray(v) ? [v[0] || 0, v[1] || 0] : [v || 0, v || 0]);
+const lvMax = (v) => Math.max(...lvLR(v));
+/// Ganho de cada lado para um pan (potência constante, centro = 0 dB nos dois, como o motor).
+const panLR = (p) => [Math.min(1, 1 - p), Math.min(1, 1 + p)];
 const toDb = (g) => (g <= 0.001 ? -60 : Math.max(-60, Math.min(6, 20 * Math.log10(g))));
 const fromDb = (db) => (db <= -59.9 ? 0 : 10 ** (db / 20));
 const dbText = (g) => (g <= 0.001 ? "−∞" : `${toDb(g) > 0 ? "+" : ""}${fmt(toDb(g), 1)}`);
@@ -436,8 +441,11 @@ function mixStrip(g, e, i) {
     <div class="strip-body">
       <div class="scale" aria-hidden="true">${[6, 0, -6, -12, -24, -48].map((d) => `<span style="bottom:${((d + 60) / 66) * 100}%">${d > 0 ? "+" + d : d}</span>`).join("")}</div>
       <input type="range" class="fader" min="-60" max="6" step="0.5" value="${toDb(e.gain)}" aria-label="Volume de ${esc(name)}">
-      <div class="meter" title="Claro: o que entra · Cor: depois do fader" aria-hidden="true"><i class="pre"></i><i class="post"></i><b></b></div>
+      <div class="meters" title="Esquerdo e direito · claro: o que entra · cor: depois do fader e do pan" aria-hidden="true">
+        <div class="meter" data-ch="0"><i class="pre"></i><i class="post"></i><b></b></div><div class="meter" data-ch="1"><i class="pre"></i><i class="post"></i><b></b></div>
+      </div>
     </div>
+    <div class="strip-lr" aria-hidden="true"><span>E</span><span>D</span></div>
     <output class="strip-db">${dbText(e.gain)}</output>
     <div class="strip-ms"><button class="strip-mute" title="Mudo">M</button><button class="strip-solo" title="Solo (só as entradas em solo tocam)">S</button></div>
   </div>`;
@@ -448,7 +456,8 @@ function masterStrip(n) {
     <span class="strip-ic">${iconHtml("out")}</span>
     <span class="strip-name">Master</span>
     <div class="strip-pan"></div>
-    <div class="strip-body"><div class="scale" aria-hidden="true">${[6, 0, -6, -12, -24, -48].map((d) => `<span style="bottom:${((d + 60) / 66) * 100}%">${d > 0 ? "+" + d : d}</span>`).join("")}</div><div class="meter wide" aria-hidden="true"><i class="pre"></i><i class="post"></i><b></b></div></div>
+    <div class="strip-body"><div class="scale" aria-hidden="true">${[6, 0, -6, -12, -24, -48].map((d) => `<span style="bottom:${((d + 60) / 66) * 100}%">${d > 0 ? "+" + d : d}</span>`).join("")}</div><div class="meters wide" aria-hidden="true"><div class="meter" data-ch="0"><i class="pre"></i><i class="post"></i><b></b></div><div class="meter" data-ch="1"><i class="pre"></i><i class="post"></i><b></b></div></div></div>
+    <div class="strip-lr" aria-hidden="true"><span>E</span><span>D</span></div>
     <output class="strip-db strip-peak">−∞</output>
     <div class="strip-ms"></div>
   </div>`;
@@ -476,13 +485,16 @@ function startMeters(box, g) {
     box.querySelectorAll(".strip[data-edge-i]").forEach((st) => {
       const e = g.edges[Number(st.dataset.edgeI)];
       if (!e) return;
-      const pre = lv[st.dataset.src] || 0;
-      meterSet(st.querySelector(".meter"), pre * (e.mute ? 0 : e.gain), pre);
+      const pre = lvLR(lv[st.dataset.src]);
+      const pg = panLR(e.pan || 0);
+      const g = e.mute ? 0 : e.gain;
+      st.querySelectorAll(".meter").forEach((m) => { const c = Number(m.dataset.ch); meterSet(m, pre[c] * g * pg[c], pre[c]); });
     });
     box.querySelectorAll(".strip[data-master]").forEach((st) => {
-      const v = lv[st.dataset.master] || 0;
-      meterSet(st.querySelector(".meter"), v);
-      st.querySelector(".strip-peak").textContent = v > 1e-6 ? `${fmt(20 * Math.log10(v), 1)}` : "−∞";
+      const v = lvLR(lv[st.dataset.master]);
+      st.querySelectorAll(".meter").forEach((m) => meterSet(m, v[Number(m.dataset.ch)]));
+      const pk = Math.max(v[0], v[1]);
+      st.querySelector(".strip-peak").textContent = pk > 1e-6 ? `${fmt(20 * Math.log10(pk), 1)}` : "−∞";
     });
   }, 70);
 }
@@ -980,7 +992,7 @@ setInterval(async () => {
   try { const all = await invoke("get_levels"); lv = all[owner()] || all[String(owner()).toLowerCase()]; } catch (e) { return; }
   const w = W - 84;
   document.querySelectorAll("#fl-canvas .lvl").forEach((r) => {
-    const v = lv ? lv[r.dataset.lvl] || 0 : 0;
+    const v = lv ? lvMax(lv[r.dataset.lvl]) : 0;
     r.setAttribute("width", ((meterPct(v) / 100) * w).toFixed(1));
     r.classList.toggle("hot", v >= 0.89);
   });
