@@ -54,6 +54,9 @@ pub struct Edge {
     pub to: String,
     #[serde(default = "one")]
     pub gain: f32,
+    /// Mudo na mesa de som (a seta continua desenhada, mas não passa som)
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub mute: bool,
 }
 
 fn one() -> f32 {
@@ -77,11 +80,11 @@ impl Graph {
         for i in 0..n_plugins {
             let id = format!("p{i}");
             g.nodes.push(Node { id: id.clone(), kind: NodeKind::Plugin { plugin: i }, x: 220.0 + 200.0 * i as f32, y: 160.0 });
-            g.edges.push(Edge { from: prev, to: id.clone(), gain: 1.0 });
+            g.edges.push(Edge { from: prev, to: id.clone(), gain: 1.0, mute: false });
             prev = id;
         }
         g.nodes.push(Node { id: OUTPUT.into(), kind: NodeKind::Output, x: 220.0 + 200.0 * n_plugins as f32, y: 160.0 });
-        g.edges.push(Edge { from: prev, to: OUTPUT.into(), gain: 1.0 });
+        g.edges.push(Edge { from: prev, to: OUTPUT.into(), gain: 1.0, mute: false });
         g
     }
 }
@@ -131,7 +134,7 @@ fn plan_with(g: &Graph, require_io: bool) -> Result<Plan, PlanError> {
         if b == input || a == output || !e.gain.is_finite() {
             continue; // nada entra no "in" e nada sai do "out"
         }
-        inputs[b].push((a, e.gain.clamp(0.0, 4.0)));
+        inputs[b].push((a, if e.mute { 0.0 } else { e.gain.clamp(0.0, 4.0) }));
         outs[a].push(b);
         indeg[b] += 1;
     }
@@ -213,7 +216,7 @@ mod tests {
     }
 
     fn edge(a: &str, b: &str, g: f32) -> Edge {
-        Edge { from: a.into(), to: b.into(), gain: g }
+        Edge { from: a.into(), to: b.into(), gain: g, mute: false }
     }
 
     #[test]
@@ -313,6 +316,15 @@ mod tests {
         assert_eq!(p.order.len(), 3);
         let pos = |id: &str| p.order.iter().position(|&i| g.nodes[i].id == id).unwrap();
         assert!(pos("a") < pos("m") && pos("m") < pos("s"));
+    }
+
+    #[test]
+    fn muted_edge_passes_nothing() {
+        let mut g = Graph::serial(0);
+        g.edges[0].mute = true;
+        assert_eq!(exec(&g, &[], 1.0), Some(0.0));
+        let e: Edge = serde_json::from_str(r#"{"from":"a","to":"b","gain":0.5}"#).unwrap();
+        assert!(!e.mute, "arquivos antigos (sem mute) continuam funcionando");
     }
 
     #[test]

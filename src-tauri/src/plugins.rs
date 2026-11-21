@@ -69,6 +69,12 @@ pub fn set_chain(endpoint: &str, chain: &Chain) -> Result<(), String> {
     std::fs::rename(&tmp, &f).map_err(|e| e.to_string())
 }
 
+/// Medições do executor (CPU, tempos, atrasos), gravadas por ele a cada 1 s.
+pub fn read_stats() -> serde_json::Value {
+    let p = chains_dir().parent().unwrap().join("stats.json");
+    std::fs::read_to_string(p).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or(serde_json::json!({ "flows": [] }))
+}
+
 // ---------------- fluxos independentes (com triggers) ----------------
 
 pub fn flows_dir() -> PathBuf {

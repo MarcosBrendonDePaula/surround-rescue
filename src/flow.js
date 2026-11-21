@@ -22,7 +22,58 @@ const FL = {
   flowId: null,
   flow: null,         // { name, enabled, when: { exe }, plugins, graph }
   flows: [],          // lista resumida para a barra lateral
+  stats: {},          // medições do executor por dono (id do dispositivo/fluxo)
 };
+
+// ---------- medições (CPU, tempos, atrasos) ----------
+const fmt = (n, d = 1) => Number(n || 0).toLocaleString("pt-BR", { minimumFractionDigits: d, maximumFractionDigits: d });
+
+async function flPollStats() {
+  if (!$("#tab-fluxo").classList.contains("active")) return;
+  try {
+    const st = await invoke("get_stats");
+    const fresh = Date.now() - (st.updated_ms ? 0 : 0);
+    FL.stats = Object.fromEntries((st.flows || []).map((f) => [f.id.toLowerCase(), f]));
+  } catch (e) { FL.stats = {}; }
+  flStatsRender();
+  flSideStats();
+}
+
+function linkName(l) {
+  const d = PL.devices.find((x) => x.id.toLowerCase() === String(l.target).toLowerCase());
+  return d ? d.name : l.target;
+}
+
+function flStatsRender() {
+  const s = FL.stats[String(owner() || "").toLowerCase()];
+  const box = $("#fl-stats");
+  if (!s || !s.running) {
+    box.innerHTML = s === undefined ? "" : `<span class="fl-stat">Parado (sem som passando ou condição não atendida)</span>`;
+    return;
+  }
+  const cpuCls = s.cpu_pct > 50 ? "bad" : s.cpu_pct > 20 ? "warn" : "";
+  let h = `<span class="fl-stat ${cpuCls}" title="Parte de cada bloco de 10 ms gasta processando este fluxo"><b>${fmt(s.cpu_pct, 2)}%</b>CPU</span>`;
+  h += `<span class="fl-stat" title="Tempo médio por bloco; entre parênteses, o pior do último segundo"><b>${fmt(s.avg_ms, 3)} ms</b>por bloco (pior ${fmt(s.worst_ms, 2)})</span>`;
+  h += `<span class="fl-stat" title="${s.kind === "device" ? "Roda dentro do bloco do Windows: não soma atraso" : "Relógio próprio de 10 ms"}"><b>+${fmt(s.inline_latency_ms, 0)} ms</b>no caminho principal</span>`;
+  if (s.misses) h += `<span class="fl-stat bad" title="Blocos que passaram sem efeito por atraso"><b>${s.misses}</b>blocos atrasados</span>`;
+  for (const l of s.links || []) {
+    const cls = !l.connected ? "warn" : l.glitches ? "warn" : "";
+    const what = l.kind === "send" ? "envio" : "captura";
+    h += `<span class="fl-stat ${cls}" title="Fila ${fmt(l.queue_ms)} ms · correção de relógio ${fmt(l.drift_pct, 3)}% · ${l.glitches} falhas"><b>${l.connected ? `${fmt(l.latency_ms, 0)} ms` : "—"}</b>${what}: ${esc(trunc(linkName(l), 22))}${l.connected ? "" : " (esperando)"}</span>`;
+  }
+  box.innerHTML = h;
+}
+
+function flSideStats() {
+  $$(".fl-row").forEach((r) => {
+    const id = (r.dataset.dev || r.dataset.flow || "").toLowerCase();
+    const s = FL.stats[id];
+    let c = r.querySelector(".cpu");
+    if (!c) { c = document.createElement("span"); c.className = "cpu"; r.appendChild(c); }
+    c.textContent = s && s.running ? `${fmt(s.cpu_pct, 1)}%` : "";
+  });
+}
+setInterval(flPollStats, 1000);
 
 // blocos nativos: nome, unidade, faixa e valor inicial
 const FX = {
@@ -136,7 +187,7 @@ function flRender() {
     const sel = FL.sel?.edge === i;
     const mx = (p1[0] + p2[0]) / 2, my = (p1[1] + p2[1]) / 2;
     s += `<g class="edge-g${sel ? " sel" : ""}">
-      <path class="edge live${sel ? " sel" : ""}" d="${d}"/>
+      <path class="edge${e.mute ? " muted" : " live"}${sel ? " sel" : ""}" d="${d}"/>
       <path class="hit" data-edge="${i}" d="${d}"/>
       ${Math.abs(e.gain - 1) > 0.001 ? `<text class="gain" x="${mx}" y="${my - 20}">${Math.round(e.gain * 100)}%</text>` : ""}
       <g class="edge-tools">${btn(mx - 15, my, "+", `data-edge-add="${i}"`)}${btn(mx + 15, my, "🗑", `data-edge-del="${i}"`, "danger")}</g>
@@ -234,6 +285,11 @@ function flPanel() {
           <input type="range" id="fl-fx-val" min="${f.min}" max="${f.max}" step="${f.step}" value="${n.value}"></div>`;
       } else if (f) h += `<p class="desc">${esc(f.desc)}</p>`;
     }
+    const ins = g.edges.map((e, i) => [e, i]).filter(([e]) => e.to === n.id);
+    if (ins.length && ["mixer", "output", "send"].includes(n.kind)) {
+      h += `<div class="flabel" style="margin-top:6px"><span>Mesa de som</span><span class="desc" style="margin:0">${ins.length} entrada${ins.length > 1 ? "s" : ""}</span></div>
+        <div class="mx">${ins.map(([e, i]) => mixStrip(g, e, i)).join("")}</div>`;
+    }
     if (["input", "output"].includes(n.kind)) h += `<p class="desc">Esta caixa é fixa.</p>`;
     else h += `<button class="pill" id="fl-del-node">Remover caixa</button>`;
     box.innerHTML = h;
@@ -244,6 +300,7 @@ function flPanel() {
     $("#fl-recv-dev")?.addEventListener("change", (e) => { n.device = e.target.value; flChanged(); });
     $("#fl-listen-dev")?.addEventListener("change", (e) => { n.device = e.target.value; flChanged(); });
     $("#fl-app-exe")?.addEventListener("change", (e) => { n.exe = e.target.value.trim().toLowerCase(); flChanged(); });
+    bindMixer(box, g);
     const fv = $("#fl-fx-val");
     if (fv) {
       fillPct(fv);
@@ -251,6 +308,47 @@ function flPanel() {
     }
   }
   box.querySelector("[data-close]")?.addEventListener("click", () => { FL.sel = null; flRender(); flPanel(); });
+}
+
+// ---------- mesa de som ----------
+const toDb = (g) => (g <= 0.001 ? -60 : Math.max(-60, Math.min(6, 20 * Math.log10(g))));
+const fromDb = (db) => (db <= -59.9 ? 0 : 10 ** (db / 20));
+const dbText = (g) => (g <= 0.001 ? "−∞" : `${toDb(g) > 0 ? "+" : ""}${fmt(toDb(g), 1)}`);
+
+function mixStrip(g, e, i) {
+  const src = g.nodes.find((x) => x.id === e.from);
+  const [name, , glyph] = src ? nodeInfo(src) : ["?", "", "?"];
+  return `<div class="strip${e.mute ? " muted" : ""}" data-edge-i="${i}">
+    <span class="strip-ic">${glyph}</span>
+    <output class="strip-db">${dbText(e.gain)}</output>
+    <input type="range" class="fader" min="-60" max="6" step="0.5" value="${toDb(e.gain)}" aria-label="Volume de ${esc(name)}">
+    <button class="strip-mute" title="Mudo">M</button>
+    <span class="strip-name" title="${esc(name)}">${esc(trunc(name, 9))}</span>
+  </div>`;
+}
+
+function bindMixer(box, g) {
+  box.querySelectorAll(".strip").forEach((st) => {
+    const e = g.edges[Number(st.dataset.edgeI)];
+    const f = st.querySelector(".fader");
+    const out = st.querySelector(".strip-db");
+    fillPct(f);
+    f.addEventListener("input", () => {
+      e.gain = fromDb(Number(f.value));
+      out.textContent = dbText(e.gain);
+      fillPct(f);
+      flSaveSoon();
+      flRender();
+    });
+    // duplo clique no fader: volta a 0 dB
+    f.addEventListener("dblclick", () => { e.gain = 1; f.value = 0; out.textContent = dbText(1); fillPct(f); flSaveSoon(); flRender(); });
+    st.querySelector(".strip-mute").addEventListener("click", () => {
+      e.mute = !e.mute;
+      st.classList.toggle("muted", e.mute);
+      flSaveSoon();
+      flRender();
+    });
+  });
 }
 
 // ---------- catálogo ----------

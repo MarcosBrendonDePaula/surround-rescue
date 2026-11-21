@@ -38,6 +38,7 @@ enum Mode {
 }
 
 pub struct Capture {
+    pub stats: crate::stats::LinkStats,
     stop: Arc<AtomicBool>,
     thread: Option<std::thread::JoinHandle<()>>,
 }
@@ -48,6 +49,12 @@ impl Capture {
         let (prod, cons) = ring::channel(flow_rate as usize);
         let stop = Arc::new(AtomicBool::new(false));
         let st = stop.clone();
+        let target = match &src {
+            Source::App(e) => e.clone(),
+            Source::Device(d) | Source::Listen(d) => d.clone(),
+        };
+        let stats = crate::stats::link(&target, "capture");
+        let cstats = stats.clone();
         let thread = std::thread::spawn(move || unsafe {
             let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
             let mut input = None::<Input>;
@@ -55,23 +62,24 @@ impl Capture {
             while !st.load(Ordering::SeqCst) {
                 let r = match &src {
                     Source::App(exe) => match find_pid(exe) {
-                        Some(pid) => run(activate_process(pid), flow_rate, &mut prod, &mut input, &st, log, exe),
+                        Some(pid) => run(activate_process(pid), flow_rate, &mut prod, &mut input, &st, log, exe, &cstats),
                         None => {
                             // programa fechado: espera ele abrir
                             std::thread::sleep(Duration::from_secs(2));
                             continue;
                         }
                     },
-                    Source::Device(id) => run(activate_device(id, false), flow_rate, &mut prod, &mut input, &st, log, id),
-                    Source::Listen(id) => run(activate_device(id, true), flow_rate, &mut prod, &mut input, &st, log, id),
+                    Source::Device(id) => run(activate_device(id, false), flow_rate, &mut prod, &mut input, &st, log, id, &cstats),
+                    Source::Listen(id) => run(activate_device(id, true), flow_rate, &mut prod, &mut input, &st, log, id, &cstats),
                 };
+                cstats.lock().unwrap().connected = false;
                 if let Err(e) = r {
                     log(&format!("captura: {e} (tentando de novo)"));
                 }
                 std::thread::sleep(Duration::from_secs(2));
             }
         });
-        (cons, Capture { stop, thread: Some(thread) })
+        (cons, Capture { stats, stop, thread: Some(thread) })
     }
 }
 
@@ -178,6 +186,7 @@ unsafe fn run(
     stop: &AtomicBool,
     log: fn(&str),
     what: &str,
+    stats: &crate::stats::LinkStats,
 ) -> Result<()> {
     let (client, fmt_raw, mode) = act?;
     let fmt = *(fmt_raw.as_ptr() as *const WAVEFORMATEX);
@@ -203,6 +212,7 @@ unsafe fn run(
     client.Start()?;
     let mut tmp: Vec<f32> = Vec::with_capacity(rate as usize * ch);
     let mut idle = 0u32;
+    let mut last_stats = std::time::Instant::now();
     while !stop.load(Ordering::SeqCst) {
         if WaitForSingleObject(ev, 100) != WAIT_OBJECT_0 {
             // processo de loopback que fechou não sinaliza mais: confere se ainda existe
@@ -232,6 +242,17 @@ unsafe fn run(
             }
             cap.ReleaseBuffer(frames)?;
             inp.push(&tmp, ch);
+            if last_stats.elapsed().as_millis() >= 250 {
+                last_stats = std::time::Instant::now();
+                let q = inp.queued() as f64 * 1000.0 / flow_rate as f64;
+                let mut s = stats.lock().unwrap();
+                s.connected = true;
+                s.rate = rate;
+                s.queue_ms = q;
+                s.latency_ms = q + 20.0; // + buffer de captura pedido ao Windows
+                s.glitches = inp.overflows;
+                s.drift_pct = (inp.ratio() * rate as f64 / flow_rate as f64 - 1.0) * 100.0;
+            }
         }
     }
     let _ = client.Stop();

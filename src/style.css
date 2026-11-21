@@ -292,3 +292,26 @@ pre { white-space: pre-wrap; font-size: 11.5px; color: var(--soft); background: 
 #fl-name { font: 600 22px var(--display); min-width: 220px; background: transparent; border: 1px dashed var(--line); }
 .fl-when { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: -4px 0 12px; color: var(--soft); }
 .fl-stage { height: calc(100vh - 250px); }
+
+/* medições */
+.fl-stats { display: flex; flex-wrap: wrap; gap: 8px; margin: -4px 0 10px; }
+.fl-stats:empty { display: none; }
+.fl-stat { background: var(--surface); border-radius: 9px; padding: 6px 10px; font-size: 12px; color: var(--soft); }
+.fl-stat b { font: 600 14px var(--display); color: var(--ink); margin-right: 4px; font-variant-numeric: tabular-nums; }
+.fl-stat.warn b { color: var(--warn); }
+.fl-stat.bad b { color: var(--bad); }
+.fl-row .cpu { margin-left: auto; font: 600 11px var(--display); color: var(--soft); font-variant-numeric: tabular-nums; }
+
+/* mesa de som */
+.mx { display: flex; gap: 6px; overflow-x: auto; padding: 8px 2px 4px; }
+.strip { display: grid; justify-items: center; gap: 6px; min-width: 58px; padding: 8px 4px; border-radius: 10px; background: var(--night); }
+.strip-ic { width: 28px; height: 28px; border-radius: 8px; display: grid; place-items: center; background: color-mix(in srgb, var(--amber) 20%, transparent); color: var(--amber); font: 700 13px var(--display); }
+.strip-db { font: 600 12px var(--display); color: var(--amber); font-variant-numeric: tabular-nums; }
+.strip .fader { writing-mode: vertical-lr; direction: rtl; width: 26px; height: 150px; }
+.strip .fader::-webkit-slider-runnable-track { width: 6px; height: auto; background: linear-gradient(0deg, var(--amber) var(--p, 50%), var(--line) var(--p, 50%)); }
+.strip .fader::-webkit-slider-thumb { margin-top: 0; margin-left: -6px; width: 18px; height: 12px; border-radius: 4px; }
+.strip-mute { width: 30px; height: 24px; border-radius: 6px; border: 1px solid var(--line); background: var(--surface); font: 700 11px var(--display); cursor: pointer; }
+.strip.muted .strip-mute { background: var(--bad); color: #fff; border-color: var(--bad); }
+.strip.muted .fader, .strip.muted .strip-db { opacity: .35; }
+.strip-name { font-size: 11px; color: var(--soft); max-width: 58px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#fl-canvas .edge.muted { stroke-dasharray: 2 6; opacity: .45; }

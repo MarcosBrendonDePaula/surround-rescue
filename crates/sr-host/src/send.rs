@@ -15,6 +15,7 @@ const PCM: GUID = GUID::from_u128(0x00000001_0000_0010_8000_00aa00389b71);
 
 pub struct Sender {
     pub device: String,
+    pub stats: crate::stats::LinkStats,
     stop: Arc<AtomicBool>,
     thread: Option<std::thread::JoinHandle<()>>,
 }
@@ -26,18 +27,21 @@ impl Sender {
         let (prod, cons) = ring::channel(src_rate as usize);
         let stop = Arc::new(AtomicBool::new(false));
         let (dev, st) = (device.to_string(), stop.clone());
+        let stats = crate::stats::link(device, "send");
+        let sstats = stats.clone();
         let thread = std::thread::spawn(move || {
             // destino desconectado ou perdido no meio: tenta de novo a cada 2 s até o fluxo parar
             let mut cons = Some(cons);
             let mut out: Option<Output> = None;
             let mut warned = false;
             while !st.load(Ordering::SeqCst) {
-                match unsafe { render(&dev, &mut cons, &mut out, src_rate, &st, log) } {
+                match unsafe { render(&dev, &mut cons, &mut out, src_rate, &st, log, &sstats) } {
                     Ok((rate, under, ratio)) => {
                         log(&format!("envio para {dev} encerrado: destino {rate} Hz, faltas de som {under}, correção de relógio {:+.4}%", (ratio - 1.0) * 100.0));
                         break;
                     }
                     Err(e) => {
+                        sstats.lock().unwrap().connected = false;
                         if !warned {
                             log(&format!("envio para {dev} esperando o dispositivo: {e}"));
                             warned = true;
@@ -47,7 +51,7 @@ impl Sender {
                 }
             }
         });
-        (prod, Sender { device: device.to_string(), stop, thread: Some(thread) })
+        (prod, Sender { device: device.to_string(), stats, stop, thread: Some(thread) })
     }
 }
 
@@ -67,6 +71,7 @@ unsafe fn render(
     src_rate: u32,
     stop: &AtomicBool,
     log: fn(&str),
+    stats: &crate::stats::LinkStats,
 ) -> Result<(u32, u64, f64)> {
     CoInitializeEx(None, COINIT_MULTITHREADED).ok()?;
     let en: IMMDeviceEnumerator = CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)?;
@@ -104,6 +109,8 @@ unsafe fn render(
     }
     client.Start()?;
     let mut last_report = std::time::Instant::now();
+    let mut last_stats = std::time::Instant::now();
+    let device_ms = total as f64 * 1000.0 / rate as f64;
     let mut last_under = 0u64;
     while !stop.load(Ordering::SeqCst) {
         if last_report.elapsed().as_secs() >= 5 {
@@ -115,6 +122,17 @@ unsafe fn render(
                 (out.ratio() * src_rate as f64 / rate as f64 - 1.0) * 100.0
             ));
             last_under = out.underruns;
+        }
+        if last_stats.elapsed().as_millis() >= 250 {
+            last_stats = std::time::Instant::now();
+            let q = out.queued() as f64 * 1000.0 / src_rate as f64;
+            let mut s = stats.lock().unwrap();
+            s.connected = true;
+            s.rate = rate;
+            s.queue_ms = q;
+            s.latency_ms = q + device_ms;
+            s.glitches = out.underruns;
+            s.drift_pct = (out.ratio() * src_rate as f64 / rate as f64 - 1.0) * 100.0;
         }
         if WaitForSingleObject(event, 200) != WAIT_OBJECT_0 {
             continue;

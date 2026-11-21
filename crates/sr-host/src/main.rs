@@ -17,6 +17,7 @@ mod send;
 mod blocks;
 mod capture;
 mod flows;
+mod stats;
 
 use chain::{chains_dir, root_dir, AudioChain, ChainConfig, Loaded};
 use std::collections::HashMap;
@@ -62,6 +63,7 @@ struct Device {
     captures: Vec<capture::Capture>,
     slot: Slot,
     stop: Arc<AtomicBool>,
+    timing: Arc<stats::Timing>,
 }
 
 impl Device {
@@ -79,6 +81,7 @@ impl Device {
             captures: vec![],
             slot: Arc::new(Mutex::new(None)),
             stop: Arc::new(AtomicBool::new(false)),
+            timing: stats::Timing::new(),
         }
     }
 
@@ -91,8 +94,8 @@ impl Device {
         let c = Arc::new(c);
         log(&format!("{}: conectado ao APO", self.endpoint));
         self.channel = Some(c.clone());
-        let (slot, stop) = (self.slot.clone(), self.stop.clone());
-        std::thread::spawn(move || audio_thread(c, slot, stop));
+        let (slot, stop, timing) = (self.slot.clone(), self.stop.clone(), self.timing.clone());
+        std::thread::spawn(move || audio_thread(c, slot, stop, timing));
     }
 
     fn close_windows(&mut self) {
@@ -253,7 +256,7 @@ fn sends_back(from: &str, to: &str) -> bool {
     false
 }
 
-fn audio_thread(ch: Arc<sr_ipc::Channel>, slot: Slot, stop: Arc<AtomicBool>) {
+fn audio_thread(ch: Arc<sr_ipc::Channel>, slot: Slot, stop: Arc<AtomicBool>, timing: Arc<stats::Timing>) {
     let mut chain: Option<AudioChain> = None;
     while !stop.load(Ordering::SeqCst) {
         if let Ok(mut s) = slot.try_lock() {
@@ -264,7 +267,8 @@ fn audio_thread(ch: Arc<sr_ipc::Channel>, slot: Slot, stop: Arc<AtomicBool>) {
         ch.heartbeat();
         ch.serve(50, |audio, sr, chs| {
             if let Some(c) = chain.as_mut().filter(|c| c.sample_rate() == sr as f64) {
-                c.process(audio, chs as usize);
+                let frames = audio.len() / (chs as usize).max(1);
+                timing.measure(frames, sr as f64, || c.process(audio, chs as usize));
             }
         });
     }
@@ -310,6 +314,7 @@ fn run() {
     let mut free_flows: HashMap<String, flows::Flow> = HashMap::new();
     let mut last_tick = Instant::now() - Duration::from_secs(10);
     let mut last_save = Instant::now();
+    let mut last_stats = Instant::now();
     loop {
         pump_messages();
         for d in devices.values_mut() {
@@ -363,6 +368,30 @@ fn run() {
             for f in free_flows.values_mut() {
                 f.tick();
             }
+        }
+        // medições para o app (1 vez por segundo)
+        if last_stats.elapsed() >= Duration::from_secs(1) {
+            last_stats = Instant::now();
+            let mut all = vec![];
+            for d in devices.values() {
+                let (cpu, avg, worst) = d.timing.read();
+                all.push(stats::FlowStats {
+                    id: d.endpoint.clone(),
+                    kind: "device".into(),
+                    // conectado ao motor do dispositivo = está processando o som dele
+                    running: d.channel.is_some(),
+                    cpu_pct: cpu,
+                    avg_ms: avg,
+                    worst_ms: worst,
+                    misses: d.channel.as_ref().map(|c| c.header().misses.load(Ordering::Relaxed)).unwrap_or(0),
+                    inline_latency_ms: 0.0,
+                    links: d.senders.iter().map(|s| s.stats.lock().unwrap().clone()).chain(d.captures.iter().map(|c| c.stats.lock().unwrap().clone())).collect(),
+                });
+            }
+            for f in free_flows.values() {
+                all.push(f.stats());
+            }
+            stats::write(&all);
         }
         // ajustes salvos de tempos em tempos (caso o executor seja fechado à força)
         if last_save.elapsed() >= Duration::from_secs(30) {

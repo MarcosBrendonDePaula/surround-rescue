@@ -68,6 +68,7 @@ pub struct Flow {
     slot: Slot,
     stop: Arc<AtomicBool>,
     clock: Option<std::thread::JoinHandle<()>>,
+    timing: Arc<crate::stats::Timing>,
 }
 
 impl Flow {
@@ -85,6 +86,7 @@ impl Flow {
             slot: Arc::new(Mutex::new(None)),
             stop: Arc::new(AtomicBool::new(false)),
             clock: None,
+            timing: crate::stats::Timing::new(),
         }
     }
 
@@ -107,8 +109,8 @@ impl Flow {
         let ch = AudioChain::new(&self.loaded, &self.cfg.chain, RATE as f64, io.producers, io.consumers, &log);
         *self.slot.lock().unwrap() = Some(Some(ch));
         if self.clock.is_none() {
-            let (slot, stop) = (self.slot.clone(), self.stop.clone());
-            self.clock = Some(std::thread::spawn(move || clock(slot, stop)));
+            let (slot, stop, timing) = (self.slot.clone(), self.stop.clone(), self.timing.clone());
+            self.clock = Some(std::thread::spawn(move || clock(slot, stop, timing)));
         }
         self.running = true;
     }
@@ -188,6 +190,24 @@ impl Flow {
     }
 }
 
+impl Flow {
+    pub fn stats(&self) -> crate::stats::FlowStats {
+        let (cpu, avg, worst) = self.timing.read();
+        crate::stats::FlowStats {
+            id: self.id.clone(),
+            kind: "flow".into(),
+            running: self.running,
+            cpu_pct: if self.running { cpu } else { 0.0 },
+            avg_ms: avg,
+            worst_ms: worst,
+            misses: 0,
+            // o relógio próprio processa em blocos de 10 ms
+            inline_latency_ms: 10.0,
+            links: self.senders.iter().map(|s| s.stats.lock().unwrap().clone()).chain(self.captures.iter().map(|c| c.stats.lock().unwrap().clone())).collect(),
+        }
+    }
+}
+
 impl Drop for Flow {
     fn drop(&mut self) {
         self.halt();
@@ -199,7 +219,7 @@ impl Drop for Flow {
 }
 
 /// Relógio do fluxo: um bloco de 10 ms a cada 10 ms exatos.
-fn clock(slot: Slot, stop: Arc<AtomicBool>) {
+fn clock(slot: Slot, stop: Arc<AtomicBool>, timing: Arc<crate::stats::Timing>) {
     let mut chain: Option<AudioChain> = None;
     let start = Instant::now();
     let mut n: u64 = 0;
@@ -210,7 +230,7 @@ fn clock(slot: Slot, stop: Arc<AtomicBool>) {
             }
         }
         if let Some(c) = chain.as_mut() {
-            c.process_free(BLOCK);
+            timing.measure(BLOCK, RATE as f64, || c.process_free(BLOCK));
         }
         n += 1;
         let due = start + Duration::from_millis(10 * n);
