@@ -82,6 +82,11 @@ impl Processor {
         self.sr
     }
 
+    /// Atraso em amostras (só a antecipação do limitador).
+    pub fn latency(&self) -> usize {
+        self.limiter.latency()
+    }
+
     /// Aplica novas configurações. Pode ser chamado a qualquer momento (sem alocação).
     pub fn set(&mut self, s: &Settings) {
         let s = s.sanitized();
@@ -206,6 +211,13 @@ impl Processor {
 /// Microfone (mono): corte de graves → nitidez → ganho → limitador.
 pub struct MicProcessor {
     enabled: bool,
+    gate_on: bool,
+    gate_thr: f64,
+    gate_env: f64,
+    gate_gain: f64,
+    gate_open: f64,
+    gate_close: f64,
+    env_decay: f64,
     gain: Smoothed,
     filters: [Biquad; 2],
     n: usize,
@@ -215,13 +227,29 @@ pub struct MicProcessor {
 impl MicProcessor {
     pub fn new(sample_rate: f64) -> Self {
         let sr = sample_rate.max(8000.0);
-        let mut m = MicProcessor { enabled: false, gain: Smoothed::new(1.0, sr), filters: [Biquad::default(); 2], n: 0, limiter: Limiter::new(sr, CEILING_DB) };
+        let k = |ms: f64| (-1.0 / (ms * 0.001 * sr)).exp();
+        let mut m = MicProcessor {
+            enabled: false,
+            gate_on: false,
+            gate_thr: 0.0,
+            gate_env: 0.0,
+            gate_gain: 1.0,
+            gate_open: k(2.0),
+            gate_close: k(150.0),
+            env_decay: k(60.0),
+            gain: Smoothed::new(1.0, sr),
+            filters: [Biquad::default(); 2],
+            n: 0,
+            limiter: Limiter::new(sr, CEILING_DB),
+        };
         m.set(&MicSettings::default(), sr);
         m
     }
 
     pub fn set(&mut self, m: &MicSettings, sr: f64) {
         self.enabled = m.enabled;
+        self.gate_on = m.gate;
+        self.gate_thr = 10f64.powf(m.gate_db.clamp(-80.0, -10.0) / 20.0);
         let clarity_db = m.clarity.clamp(0.0, 100.0) / 100.0 * 6.0;
         self.gain.target = db_to_lin(m.gain_db.clamp(-10.0, 10.0) + if m.boost { 10.0 } else { 0.0 });
         let mut n = 0;
@@ -244,6 +272,14 @@ impl MicProcessor {
             let mut v = *x as f64;
             for f in &mut self.filters[..self.n] {
                 v = f.process(v);
+            }
+            if self.gate_on {
+                // seguidor de pico; porta abre rápido (2 ms) e fecha devagar (150 ms), até -30 dB
+                self.gate_env = v.abs().max(self.gate_env * self.env_decay);
+                let target = if self.gate_env > self.gate_thr { 1.0 } else { 0.03 };
+                let c = if target > self.gate_gain { self.gate_open } else { self.gate_close };
+                self.gate_gain = target + c * (self.gate_gain - target);
+                v *= self.gate_gain;
             }
             v *= self.gain.next();
             *x = self.limiter.process(v, v).0 as f32;
@@ -287,14 +323,17 @@ mod tests {
     }
 
     #[test]
-    fn zero_latency_on_direct_path() {
+    fn latency_is_only_the_limiter_lookahead() {
         let mut p = Processor::new(48000.0);
         p.set(&Settings { eq: [3.0, -2.0, 1.0, 0.0, 4.0, 0.0, -3.0, 2.0, 0.0, 1.0], eq_enabled: true, ..Settings::default() });
-        let mut l = vec![0.0f32; 64];
-        let mut r = vec![0.0f32; 64];
+        let la = p.latency();
+        assert_eq!(la, 72, "1,5 ms a 48 kHz");
+        let mut l = vec![0.0f32; 256];
+        let mut r = vec![0.0f32; 256];
         l[0] = 0.5;
         p.process_stereo(&mut l, &mut r);
-        assert!(l[0].abs() > 0.05, "o impulso precisa sair na mesma amostra (latência zero): {}", l[0]);
+        assert!(l[..la].iter().all(|v| v.abs() < 1e-9), "nada antes da antecipação");
+        assert!(l[la].abs() > 0.05, "o impulso sai exatamente após 1,5 ms: {}", l[la]);
     }
 
     #[test]
@@ -354,7 +393,8 @@ mod tests {
         l[0] = 0.5;
         p.process_stereo(&mut l, &mut r);
         let first = r.iter().position(|v| v.abs() > 1e-6).unwrap();
-        // 0,65 ms a 48 kHz ≈ 31 amostras
+        // 0,65 ms a 48 kHz ≈ 31 amostras, depois da antecipação do limitador
+        let first = first - p.latency();
         assert!((28..=34).contains(&first), "chegou na amostra {first}");
     }
 
@@ -376,14 +416,75 @@ mod tests {
     fn mic_chain() {
         let sr = 48000.0;
         let mut m = MicProcessor::new(sr);
-        m.set(&MicSettings { enabled: true, boost: true, gain_db: 10.0, rumble_filter: true, clarity: 50.0 }, sr);
+        m.set(&MicSettings { enabled: true, boost: true, gain_db: 10.0, rumble_filter: true, clarity: 50.0, gate: false, gate_db: -45.0 }, sr);
         let mut x = sine(1000.0, sr, 4800, 0.9);
         m.process(&mut x);
         assert!(x.iter().all(|v| v.abs() <= 0.8913 + 1e-4));
         let mut hum = sine(30.0, sr, 48000, 0.05);
         let before = rms_db(&hum);
-        m.set(&MicSettings { enabled: true, boost: false, gain_db: 0.0, rumble_filter: true, clarity: 0.0 }, sr);
+        m.set(&MicSettings { enabled: true, boost: false, gain_db: 0.0, rumble_filter: true, clarity: 0.0, gate: false, gate_db: -45.0 }, sr);
         m.process(&mut hum);
         assert!(before - rms_db(&hum[24000..]) > 10.0, "filtro de graves deveria cortar 30 Hz");
+    }
+}
+
+#[cfg(test)]
+mod razer_parity_tests {
+    use super::*;
+    use crate::dynamics::{Compressor, Limiter};
+
+    fn sine(freq: f64, sr: f64, n: usize, amp: f64) -> Vec<f64> {
+        (0..n).map(|i| amp * (i as f64 * 2.0 * std::f64::consts::PI * freq / sr).sin()).collect()
+    }
+
+    /// Batida de graves forte começando de repente: com a antecipação, o ganho já desceu quando o
+    /// pico chega, então a trava final (que "rasga" a onda) quase não age.
+    #[test]
+    fn limiter_handles_sudden_bass_without_hard_clipping() {
+        let sr = 48000.0;
+        let mut lim = Limiter::new(sr, CEILING_DB);
+        let ceil = 10f64.powf(CEILING_DB / 20.0);
+        let mut x = vec![0.0; 4800];
+        x.extend(sine(55.0, sr, 24000, 1.8));
+        let mut clamped = 0;
+        let mut peak: f64 = 0.0;
+        for v in &x {
+            let (o, _) = lim.process(*v, *v);
+            peak = peak.max(o.abs());
+            // acima da mira (0,999 do teto) = a trava final achatou a onda
+            if o.abs() > ceil * 0.9995 {
+                clamped += 1;
+            }
+        }
+        assert!(peak <= ceil + 1e-9, "passou do teto: {peak}");
+        assert!(clamped < 20, "trava agiu em {clamped} amostras (onda cortada)");
+    }
+
+    /// Normalização como a do Nahimic: sobe o que está baixo, abaixa o que está alto, não mexe no silêncio.
+    #[test]
+    fn normalization_levels_quiet_and_loud_but_not_silence() {
+        let mut c = Compressor::new(48000.0);
+        c.set_level(50.0);
+        assert!(c.gain_db(-40.0) > 3.0, "som baixo sobe: {}", c.gain_db(-40.0));
+        assert!(c.gain_db(-6.0) < -2.0, "som alto desce: {}", c.gain_db(-6.0));
+        assert!(c.gain_db(-18.0).abs() < 0.01, "na referência não mexe");
+        assert_eq!(c.gain_db(-80.0), 0.0, "silêncio e chiado não sobem");
+    }
+
+    /// Porta de ruído: ventilador baixinho some; voz passa.
+    #[test]
+    fn mic_gate_mutes_background_noise_but_keeps_voice() {
+        let sr = 48000.0;
+        let run = |amp: f64| {
+            let mut m = MicProcessor::new(sr);
+            m.set(&MicSettings { enabled: true, boost: false, gain_db: 0.0, rumble_filter: false, clarity: 0.0, gate: true, gate_db: -45.0 }, sr);
+            let mut x: Vec<f32> = sine(400.0, sr, 48000, amp).iter().map(|v| *v as f32).collect();
+            m.process(&mut x);
+            // depois de 0,5 s (a porta fecha devagar, para não cortar o fim das palavras)
+            let s: f64 = x[24000..].iter().map(|v| (*v as f64).powi(2)).sum::<f64>() / 24000.0;
+            10.0 * s.log10() - 20.0 * (amp / 2f64.sqrt()).log10()
+        };
+        assert!(run(0.002) < -20.0, "ruído a -54 dB deveria sumir: {}", run(0.002));
+        assert!(run(0.1).abs() < 1.0, "voz a -20 dB passa inteira: {}", run(0.1));
     }
 }

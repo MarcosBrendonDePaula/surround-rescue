@@ -162,10 +162,12 @@ impl Plugin for SurroundRescue {
         create_egui_editor(self.params.editor_state.clone(), (), |ctx, _| editor::setup(ctx), move |ctx, setter, _| editor::draw(ctx, setter, &params))
     }
 
-    fn initialize(&mut self, _: &AudioIOLayout, cfg: &BufferConfig, _: &mut impl InitContext<Self>) -> bool {
+    fn initialize(&mut self, _: &AudioIOLayout, cfg: &BufferConfig, ctx: &mut impl InitContext<Self>) -> bool {
         // alocação só aqui, fora do processamento em tempo real
         let mut p = Processor::new(cfg.sample_rate as f64);
         p.set(&self.params.settings());
+        // a DAW compensa a antecipação do limitador (1,5 ms)
+        ctx.set_latency_samples(p.latency() as u32);
         self.dsp = Some(p);
         self.last = self.params.fingerprint();
         true

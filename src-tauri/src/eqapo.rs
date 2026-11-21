@@ -192,7 +192,7 @@ mod tests {
 
     #[test]
     fn mic_boost_and_filters() {
-        let m = MicSettings { enabled: true, boost: true, gain_db: 0.0, rumble_filter: true, clarity: 50.0 };
+        let m = MicSettings { enabled: true, boost: true, gain_db: 0.0, rumble_filter: true, clarity: 50.0, gate: false, gate_db: -45.0 };
         let t = generate_mic(&m);
         assert!(t.contains("Preamp: 6 dB"));
         assert!(t.contains("Filter: ON HP Fc 90 Hz"));

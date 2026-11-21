@@ -1,6 +1,6 @@
 //! Motor de áudio do Surround Rescue.
 //!
-//! - Atraso zero: só filtros IIR e dinâmica sem "lookahead".
+//! - Atraso mínimo: filtros IIR e um limitador que olha 1,5 ms à frente.
 //! - Sem alocação de memória dentro de `process` (seguro para tempo real: APO, VST3, ASIO).
 //! - As mesmas `Settings` usadas pelo app, pelo plugin e pelo APO.
 
@@ -144,11 +144,15 @@ pub struct MicSettings {
     pub rumble_filter: bool,
     /// Nitidez da voz 0..=100
     pub clarity: f64,
+    /// Porta de ruído: fecha o microfone quando só há ruído de fundo (o Nahimic deixava ligada)
+    pub gate: bool,
+    /// Abaixo deste nível (dBFS) a porta fecha
+    pub gate_db: f64,
 }
 
 impl Default for MicSettings {
     fn default() -> Self {
-        MicSettings { enabled: false, boost: false, gain_db: 0.0, rumble_filter: true, clarity: 30.0 }
+        MicSettings { enabled: false, boost: false, gain_db: 0.0, rumble_filter: true, clarity: 30.0, gate: true, gate_db: -45.0 }
     }
 }
 
