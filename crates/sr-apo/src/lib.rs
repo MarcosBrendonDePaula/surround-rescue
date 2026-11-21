@@ -238,13 +238,19 @@ struct Factory;
 
 impl IClassFactory_Impl for Factory_Impl {
     fn CreateInstance(&self, outer: Ref<IUnknown>, iid: *const GUID, object: *mut *mut c_void) -> Result<()> {
+        let iid_v = unsafe { *iid };
+        log(&format!("CreateInstance agregado={} iid={:?}", outer.is_some(), iid_v));
         unsafe { *object = std::ptr::null_mut() };
-        if outer.is_some() {
+        // O audiodg cria APOs "agregados" (embutidos num objeto dele) e pede IUnknown.
+        // Pela regra do COM, agregação só pode pedir IUnknown.
+        if outer.is_some() && iid_v != IUnknown::IID {
             return Err(CLASS_E_NOAGGREGATION.into());
         }
+        // Versão 1: entregamos o nosso IUnknown. O objeto do Windows consulta as interfaces
+        // do APO por ele; consultas entre interfaces do APO funcionam porque são todas nossas.
         let unk: IUnknown = SrApo::default().into();
         let r = unsafe { unk.query(iid, object) };
-        log(&format!("CreateInstance iid={:?} -> {:?}", unsafe { *iid }, r));
+        log(&format!("  -> {:?}", r));
         r.ok()
     }
 
