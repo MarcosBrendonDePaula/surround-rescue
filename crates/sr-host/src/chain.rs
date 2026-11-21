@@ -350,7 +350,7 @@ impl AudioChain {
         mut sources: std::collections::HashMap<String, sr_bridge::ring::Consumer>,
         log: &dyn Fn(&str),
     ) -> AudioChain {
-        let graph = cfg.graph.clone().unwrap_or_else(|| crate::graph::Graph::serial(cfg.plugins.len()));
+        let graph = cfg.graph.clone().unwrap_or_else(|| crate::graph::Graph::serial(cfg.plugins.len())).expand_racks();
         // fluxo independente (sem a caixa "in") usa o plano livre
         let free = !graph.nodes.iter().any(|n| n.id == crate::graph::INPUT);
         let planned = if free { crate::graph::plan_free(&graph) } else { crate::graph::plan(&graph) };

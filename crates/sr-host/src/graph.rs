@@ -20,6 +20,11 @@ pub enum NodeKind {
     Mixer,
     /// `plugin` = posição na lista `plugins` do arquivo de cadeia
     Plugin { plugin: usize },
+    /// Rack: vários plugins em fila dentro de uma caixa só (posições na lista `plugins`)
+    Rack {
+        #[serde(default)]
+        plugins: Vec<usize>,
+    },
     /// Envia o que chega aqui para outro dispositivo de saída ({guid}); também repassa adiante.
     Send { device: String },
     /// Tudo o que toca numa saída ({guid}), capturado depois da mistura (trigger "Ouvir uma saída")
@@ -72,6 +77,41 @@ pub struct Graph {
 }
 
 impl Graph {
+    /// Troca cada rack por uma fila de nós de plugin (o motor só conhece plugins soltos).
+    /// Rack vazio vira um mixer (passa o som direto).
+    pub fn expand_racks(&self) -> Graph {
+        let mut g = Graph { nodes: vec![], edges: vec![] };
+        // id do rack → (primeiro nó, último nó)
+        let mut ends: HashMap<String, (String, String)> = HashMap::new();
+        for n in &self.nodes {
+            match &n.kind {
+                NodeKind::Rack { plugins } if !plugins.is_empty() => {
+                    let ids: Vec<String> = (0..plugins.len()).map(|i| format!("{}#{i}", n.id)).collect();
+                    for (i, p) in plugins.iter().enumerate() {
+                        g.nodes.push(Node { id: ids[i].clone(), kind: NodeKind::Plugin { plugin: *p }, x: n.x, y: n.y });
+                        if i > 0 {
+                            g.edges.push(Edge { from: ids[i - 1].clone(), to: ids[i].clone(), gain: 1.0, mute: false });
+                        }
+                    }
+                    ends.insert(n.id.clone(), (ids[0].clone(), ids[ids.len() - 1].clone()));
+                }
+                NodeKind::Rack { .. } => g.nodes.push(Node { id: n.id.clone(), kind: NodeKind::Mixer, x: n.x, y: n.y }),
+                _ => g.nodes.push(n.clone()),
+            }
+        }
+        for e in &self.edges {
+            let mut e = e.clone();
+            if let Some((_, last)) = ends.get(&e.from) {
+                e.from = last.clone();
+            }
+            if let Some((first, _)) = ends.get(&e.to) {
+                e.to = first.clone();
+            }
+            g.edges.push(e);
+        }
+        g
+    }
+
     /// Fluxo em fila a partir da lista de plugins (in → p0 → p1 → … → out).
     pub fn serial(n_plugins: usize) -> Graph {
         let mut g = Graph::default();
@@ -333,5 +373,28 @@ mod tests {
         let t = serde_json::to_string(&g).unwrap();
         assert!(t.contains(r#""kind":"plugin","plugin":0"#), "{t}");
         assert_eq!(serde_json::from_str::<Graph>(&t).unwrap(), g);
+    }
+}
+
+#[cfg(test)]
+mod rack_tests {
+    use super::*;
+
+    #[test]
+    fn rack_vira_fila_de_plugins() {
+        let n = |id: &str, kind| Node { id: id.into(), kind, x: 0.0, y: 0.0 };
+        let e = |a: &str, b: &str, gain| Edge { from: a.into(), to: b.into(), gain, mute: false };
+        let g = Graph {
+            nodes: vec![n(INPUT, NodeKind::Input), n("r", NodeKind::Rack { plugins: vec![2, 0] }), n("v", NodeKind::Rack { plugins: vec![] }), n(OUTPUT, NodeKind::Output)],
+            edges: vec![e(INPUT, "r", 0.5), e("r", "v", 1.0), e("v", OUTPUT, 1.0)],
+        };
+        let x = g.expand_racks();
+        assert!(x.nodes.iter().any(|n| n.id == "r#0" && n.kind == NodeKind::Plugin { plugin: 2 }));
+        assert!(x.nodes.iter().any(|n| n.id == "r#1" && n.kind == NodeKind::Plugin { plugin: 0 }));
+        assert!(x.nodes.iter().any(|n| n.id == "v" && n.kind == NodeKind::Mixer));
+        assert!(x.edges.contains(&e(INPUT, "r#0", 0.5)));
+        assert!(x.edges.contains(&e("r#0", "r#1", 1.0)));
+        assert!(x.edges.contains(&e("r#1", "v", 1.0)));
+        assert!(plan(&x).is_ok());
     }
 }

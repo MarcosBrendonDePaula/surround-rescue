@@ -153,6 +153,10 @@ function nodeInfo(n) {
     case "receive": { const d = devName(n.device); return [d ? d.name : "Entrada", d ? d.device : "escolha a entrada", "🎙"]; }
     case "send": { const d = devName(n.device); return [d ? `Enviar: ${d.name}` : "Enviar", d ? `${d.device} · ~30 ms depois` : "escolha o destino", "↗"]; }
     case "fx": { const f = FX[n.fx] || { name: n.fx, glyph: "?" }; return [f.name, f.unit !== undefined ? `${n.value} ${f.unit}`.trim() : f.hint || "bloco nativo", f.glyph]; }
+    case "rack": {
+      const names = (n.plugins || []).map((i) => doc().plugins[i]).filter(Boolean).map((p) => (p.enabled ? "" : "⏻") + plName(p));
+      return ["Rack de VST", names.length ? names.join(" → ") : "vazio: clique para adicionar plugins", "▤"];
+    }
     case "plugin": {
       const p = doc().plugins[n.plugin];
       return [p ? baseName(p.path) : "(plugin removido)", p && !p.enabled ? "desligado" : /\.dll$/i.test(p?.path || "") ? "plugin VST2" : /\.clap$/i.test(p?.path || "") ? "plugin CLAP" : "plugin VST3", "✦"];
@@ -255,6 +259,24 @@ function flPanel() {
       const p = doc().plugins[n.plugin];
       h += `<button class="pill solid" id="fl-open">Abrir janela do plugin</button><button class="pill" id="fl-toggle">${p?.enabled ? "Desligar" : "Ligar"}</button>`;
     }
+    if (n.kind === "rack") {
+      const list = n.plugins || (n.plugins = []);
+      h += `<div class="rk-list">${list.length ? list.map((pi, i) => {
+        const p = doc().plugins[pi];
+        if (!p) return "";
+        return `<div class="rk-row${p.enabled ? "" : " off"}" data-rk="${i}">
+          <span class="rk-n">${i + 1}</span>
+          <span class="rk-name" title="${esc(p.path)}">${esc(plName(p))}<small>${esc(plFormat(p))}</small></span>
+          <button class="icon" data-rk-up="${i}" title="Subir"${i === 0 ? " disabled" : ""}>▲</button>
+          <button class="icon" data-rk-down="${i}" title="Descer"${i === list.length - 1 ? " disabled" : ""}>▼</button>
+          <button class="icon" data-rk-on="${i}" title="${p.enabled ? "Desligar" : "Ligar"}">⏻</button>
+          <button class="icon" data-rk-win="${i}" title="Abrir janela do plugin">⧉</button>
+          <button class="icon" data-rk-del="${i}" title="Tirar do rack">×</button>
+        </div>`;
+      }).join("") : `<p class="desc">Nenhum plugin ainda. O som passa direto.</p>`}</div>
+        <button class="pill solid" id="rk-add">Adicionar VST…</button>
+        <p class="desc">O som passa pelos plugins de cima para baixo.</p>`;
+    }
     if (n.kind === "send") {
       const outs = PL.devices.filter((d) => d.kind === "Saída" && d.id !== owner());
       h += `<div class="field"><div class="flabel"><span>Dispositivo de destino</span></div>
@@ -294,6 +316,24 @@ function flPanel() {
     else h += `<button class="pill" id="fl-del-node">Remover caixa</button>`;
     box.innerHTML = h;
     $("#fl-open")?.addEventListener("click", () => flOpen(n));
+    if (n.kind === "rack") {
+      $("#rk-add")?.addEventListener("click", () => openPluginBrowser((p) => {
+        doc().plugins.push({ path: p.path, enabled: true });
+        n.plugins.push(doc().plugins.length - 1);
+        flChanged();
+        flPanel();
+      }));
+      box.querySelectorAll("[data-rk-up],[data-rk-down],[data-rk-on],[data-rk-win],[data-rk-del]").forEach((b) => b.addEventListener("click", () => {
+        const d = b.dataset, l = n.plugins;
+        if (d.rkUp !== undefined) { const i = +d.rkUp; [l[i - 1], l[i]] = [l[i], l[i - 1]]; }
+        else if (d.rkDown !== undefined) { const i = +d.rkDown; [l[i + 1], l[i]] = [l[i], l[i + 1]]; }
+        else if (d.rkOn !== undefined) { const p = doc().plugins[l[+d.rkOn]]; p.enabled = !p.enabled; }
+        else if (d.rkWin !== undefined) { return flOpen({ plugin: l[+d.rkWin] }); }
+        else if (d.rkDel !== undefined) { const pi = l[+d.rkDel]; l.splice(+d.rkDel, 1); dropPlugin(pi); }
+        flChanged();
+        flPanel();
+      }));
+    }
     $("#fl-toggle")?.addEventListener("click", () => { const p = doc().plugins[n.plugin]; p.enabled = !p.enabled; flChanged(); flPanel(); });
     $("#fl-del-node")?.addEventListener("click", () => flRemoveNode(n));
     $("#fl-send-dev")?.addEventListener("change", (e) => { n.device = e.target.value; flChanged(); });
@@ -385,7 +425,8 @@ function catalogItems() {
     ]],
     ["Efeitos nativos", Object.entries(FX).map(([id, f]) => ({ k: "fx", ic: f.glyph, t: f.name, d: f.desc, node: { kind: "fx", fx: id, value: f.def ?? 0 } }))],
     ["Plugins", [
-      { k: "plugin", ic: "⌕", t: "Abrir navegador de plugins…", d: "Todos os VST3, VST2 e CLAP, com busca e filtros", browser: true },
+      { k: "plugin", ic: "▤", t: "Rack de VST", d: "Vários plugins em sequência numa caixa só", node: { kind: "rack", plugins: [] } },
+      { k: "plugin", ic: "⌕", t: "Abrir navegador de plugins…", d: "Um plugin solto, com busca e filtros", browser: true },
       ...PL.found.filter((f) => f.supported !== false && pbFavs().includes(pbKey(f)))
         .map((f) => ({ k: "plugin", ic: "★", t: f.name || baseName(f.path), d: `favorito · ${f.format || "VST3"}`, plugin: f.path })),
     ]],
@@ -471,14 +512,23 @@ function flOpen(n) {
   invoke("open_plugin_window", { endpoint: owner(), index: n.plugin }).catch((e) => flError(String(e)));
 }
 
+/// Tira um plugin da lista do arquivo e corrige as posições usadas pelas caixas e racks.
+function dropPlugin(pi) {
+  doc().plugins.splice(pi, 1);
+  graph().nodes.forEach((x) => {
+    if (x.kind === "plugin" && x.plugin > pi) x.plugin -= 1;
+    if (x.kind === "rack") x.plugins = (x.plugins || []).filter((i) => i !== pi).map((i) => (i > pi ? i - 1 : i));
+  });
+}
+const plName = (p) => (PL.found.find((f) => pbKey(f) === String(p.path).toLowerCase())?.name) || baseName(p.path);
+const plFormat = (p) => (/\.dll$/i.test(p.path) ? "VST2" : /\.clap$/i.test(p.path) ? "CLAP" : "VST3");
+
 function flRemoveNode(n) {
   const g = graph();
   g.edges = g.edges.filter((e) => e.from !== n.id && e.to !== n.id);
   g.nodes = g.nodes.filter((x) => x.id !== n.id);
-  if (n.kind === "plugin") {
-    doc().plugins.splice(n.plugin, 1);
-    g.nodes.forEach((x) => { if (x.kind === "plugin" && x.plugin > n.plugin) x.plugin -= 1; });
-  }
+  if (n.kind === "plugin") dropPlugin(n.plugin);
+  if (n.kind === "rack") [...(n.plugins || [])].sort((a, b) => b - a).forEach(dropPlugin);
   FL.sel = null;
   flChanged();
   flPanel();
