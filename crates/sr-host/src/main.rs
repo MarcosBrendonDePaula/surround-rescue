@@ -16,6 +16,7 @@ mod graph;
 mod send;
 mod blocks;
 mod capture;
+mod flows;
 
 use chain::{chains_dir, root_dir, AudioChain, ChainConfig, Loaded};
 use std::collections::HashMap;
@@ -25,7 +26,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 use vst3_host::window::PluginWindow;
 
-fn log(msg: &str) {
+pub fn log(msg: &str) {
     use std::io::Write;
     let dir = root_dir();
     let _ = std::fs::create_dir_all(&dir);
@@ -107,42 +108,12 @@ impl Device {
         log(&format!("{}: preparando cadeia a {sr} Hz", self.endpoint));
         self.loaded = chain::load(&self.endpoint, &self.cfg, sr as f64, &log);
         self.loaded_sr = sr;
-        // envios: um por nó "send", recusando o que faria o som voltar para cá (microfonia digital)
         self.senders.clear();
-        let mut producers = HashMap::new();
-        if let Some(g) = &self.cfg.graph {
-            for n in &g.nodes {
-                if let graph::NodeKind::Send { device } = &n.kind {
-                    let dev = device.to_lowercase();
-                    if dev == self.endpoint || sends_back(&dev, &self.endpoint) {
-                        log(&format!("{}: envio para {dev} recusado (o som voltaria para cá)", self.endpoint));
-                        continue;
-                    }
-                    let (prod, s) = send::Sender::start(&dev, sr, log);
-                    log(&format!("{}: enviando para {dev}", self.endpoint));
-                    producers.insert(n.id.clone(), prod);
-                    self.senders.push(s);
-                }
-            }
-        }
-        // entradas externas: programas e outros dispositivos
         self.captures.clear();
-        let mut consumers = HashMap::new();
-        if let Some(g) = &self.cfg.graph {
-            for n in &g.nodes {
-                let src = match &n.kind {
-                    graph::NodeKind::App { exe } => Some(capture::Source::App(exe.clone())),
-                    graph::NodeKind::Receive { device } if device.to_lowercase() != self.endpoint => Some(capture::Source::Device(device.clone())),
-                    _ => None,
-                };
-                if let Some(src) = src {
-                    let (cons, c) = capture::Capture::start(src, sr, log);
-                    consumers.insert(n.id.clone(), cons);
-                    self.captures.push(c);
-                }
-            }
-        }
-        *self.slot.lock().unwrap() = Some(AudioChain::new(&self.loaded, &self.cfg, sr as f64, producers, consumers, &log));
+        let io = build_io(&self.endpoint, self.cfg.graph.as_ref(), sr);
+        self.senders = io.senders;
+        self.captures = io.captures;
+        *self.slot.lock().unwrap() = Some(AudioChain::new(&self.loaded, &self.cfg, sr as f64, io.producers, io.consumers, &log));
     }
 
     /// Ciclo lento (1 s): canal, mudanças no arquivo e na taxa.
@@ -205,6 +176,59 @@ impl Drop for Device {
         self.close_windows();
         chain::save_states(&self.endpoint, &self.loaded, &log);
     }
+}
+
+/// Envios e capturas de um fluxo (de dispositivo ou independente).
+pub struct Io {
+    pub producers: HashMap<String, sr_bridge::ring::Producer>,
+    pub consumers: HashMap<String, sr_bridge::ring::Consumer>,
+    pub senders: Vec<send::Sender>,
+    pub captures: Vec<capture::Capture>,
+}
+
+/// `owner` = {guid} do dispositivo dono do fluxo, ou o id de um fluxo independente.
+/// Recusa o que faria o som voltar ao próprio lugar (microfonia digital):
+/// enviar para o próprio dispositivo, para quem envia de volta, ou para uma saída que o fluxo ouve.
+pub fn build_io(owner: &str, g: Option<&graph::Graph>, sr: u32) -> Io {
+    let mut io = Io { producers: HashMap::new(), consumers: HashMap::new(), senders: vec![], captures: vec![] };
+    let Some(g) = g else { return io };
+    let listened: Vec<String> = g
+        .nodes
+        .iter()
+        .filter_map(|n| if let graph::NodeKind::Listen { device } = &n.kind { Some(device.to_lowercase()) } else { None })
+        .collect();
+    for n in &g.nodes {
+        match &n.kind {
+            graph::NodeKind::Send { device } => {
+                let dev = device.to_lowercase();
+                if dev == owner || sends_back(&dev, owner) || listened.contains(&dev) {
+                    log(&format!("{owner}: envio para {dev} recusado (o som voltaria para cá)"));
+                    continue;
+                }
+                let (prod, s) = send::Sender::start(&dev, sr, log);
+                log(&format!("{owner}: enviando para {dev}"));
+                io.producers.insert(n.id.clone(), prod);
+                io.senders.push(s);
+            }
+            graph::NodeKind::App { exe } if !exe.is_empty() => {
+                let (cons, c) = capture::Capture::start(capture::Source::App(exe.clone()), sr, log);
+                io.consumers.insert(n.id.clone(), cons);
+                io.captures.push(c);
+            }
+            graph::NodeKind::Receive { device } if device.to_lowercase() != owner => {
+                let (cons, c) = capture::Capture::start(capture::Source::Device(device.clone()), sr, log);
+                io.consumers.insert(n.id.clone(), cons);
+                io.captures.push(c);
+            }
+            graph::NodeKind::Listen { device } if device.to_lowercase() != owner => {
+                let (cons, c) = capture::Capture::start(capture::Source::Listen(device.clone()), sr, log);
+                io.consumers.insert(n.id.clone(), cons);
+                io.captures.push(c);
+            }
+            _ => {}
+        }
+    }
+    io
 }
 
 /// O fluxo do dispositivo `from` envia (direta ou indiretamente) para `to`?
@@ -283,6 +307,7 @@ fn run() {
     let _ = std::fs::create_dir_all(root_dir().join("cmd"));
     log("executor iniciado");
     let mut devices: HashMap<String, Device> = HashMap::new();
+    let mut free_flows: HashMap<String, flows::Flow> = HashMap::new();
     let mut last_tick = Instant::now() - Duration::from_secs(10);
     let mut last_save = Instant::now();
     loop {
@@ -290,10 +315,16 @@ fn run() {
         for d in devices.values_mut() {
             d.service_windows();
         }
+        for f in free_flows.values_mut() {
+            f.service_windows();
+        }
         for (ep, n) in take_commands() {
             match devices.get_mut(&ep) {
                 Some(d) => d.open_window(n),
-                None => log(&format!("pedido de janela para dispositivo sem cadeia: {ep}")),
+                None => match free_flows.get_mut(&ep) {
+                    Some(f) => f.open_window(n),
+                    None => log(&format!("pedido de janela para fluxo inexistente: {ep}")),
+                },
             }
         }
         if last_tick.elapsed() >= Duration::from_secs(1) {
@@ -313,6 +344,24 @@ fn run() {
             devices.retain(|ep, _| present.contains(ep));
             for d in devices.values_mut() {
                 d.tick();
+            }
+            // fluxos independentes (triggers): um por arquivo na pasta flows
+            let fdir = flows::flows_dir();
+            let _ = std::fs::create_dir_all(&fdir);
+            let mut fpresent = vec![];
+            if let Ok(rd) = std::fs::read_dir(&fdir) {
+                for e in rd.flatten() {
+                    let p = e.path();
+                    if p.extension().map(|x| x == "json").unwrap_or(false) {
+                        let id = p.file_stem().unwrap().to_string_lossy().to_lowercase();
+                        fpresent.push(id.clone());
+                        free_flows.entry(id.clone()).or_insert_with(|| flows::Flow::new(id, p));
+                    }
+                }
+            }
+            free_flows.retain(|id, _| fpresent.contains(id));
+            for f in free_flows.values_mut() {
+                f.tick();
             }
         }
         // ajustes salvos de tempos em tempos (caso o executor seja fechado à força)

@@ -170,7 +170,10 @@ impl AudioChain {
         log: &dyn Fn(&str),
     ) -> AudioChain {
         let graph = cfg.graph.clone().unwrap_or_else(|| crate::graph::Graph::serial(cfg.plugins.len()));
-        let plan = match crate::graph::plan(&graph) {
+        // fluxo independente (sem a caixa "in") usa o plano livre
+        let free = !graph.nodes.iter().any(|n| n.id == crate::graph::INPUT);
+        let planned = if free { crate::graph::plan_free(&graph) } else { crate::graph::plan(&graph) };
+        let plan = match planned {
             Ok(p) => Some(p),
             Err(e) => {
                 log(&format!("fluxo inválido ({e:?}): som passa direto"));
@@ -205,6 +208,23 @@ impl AudioChain {
         self.sample_rate
     }
 
+    /// Entrega aos envios (fila cheia = descarta; nunca espera).
+    fn deliver(&self, frames: usize) {
+        for (node, prod) in &self.sends {
+            let b = &self.bufs[*node];
+            for k in 0..frames.min(b[0].len()) {
+                prod.push(b[0][k], b[1][k]);
+            }
+        }
+    }
+
+    /// Fluxo independente: roda um bloco sem entrada/saída do APO (triggers → envios).
+    pub fn process_free(&mut self, frames: usize) {
+        let Some(plan) = &self.plan else { return };
+        crate::graph::run(plan, &mut self.bufs, frames.min(MAX_FRAMES), &mut self.procs);
+        self.deliver(frames.min(MAX_FRAMES));
+    }
+
     /// Processa áudio intercalado (canais 0 e 1; demais passam direto).
     pub fn process(&mut self, audio: &mut [f32], channels: usize) {
         let Some(plan) = &self.plan else { return };
@@ -218,13 +238,7 @@ impl AudioChain {
             inp[c].extend((0..frames).map(|i| audio[i * channels + c]));
         }
         crate::graph::run(plan, &mut self.bufs, frames, &mut self.procs);
-        // entrega aos envios (fila cheia = descarta; nunca espera)
-        for (node, prod) in &self.sends {
-            let b = &self.bufs[*node];
-            for k in 0..frames.min(b[0].len()) {
-                prod.push(b[0][k], b[1][k]);
-            }
-        }
+        self.deliver(frames);
         let out = &self.bufs[plan.output];
         for c in 0..2 {
             for i in 0..frames {

@@ -22,6 +22,8 @@ pub enum NodeKind {
     Plugin { plugin: usize },
     /// Envia o que chega aqui para outro dispositivo de saída ({guid}); também repassa adiante.
     Send { device: String },
+    /// Tudo o que toca numa saída ({guid}), capturado depois da mistura (trigger "Ouvir uma saída")
+    Listen { device: String },
     /// Som de um programa (captura por processo), ex.: "spotify.exe"
     App { exe: String },
     /// Som de um dispositivo de entrada ({guid}), ex.: outro microfone
@@ -101,11 +103,25 @@ pub enum PlanError {
     Cycle,
 }
 
-/// Valida e ordena o grafo (ordenação topológica de Kahn). Setas para nós inexistentes são ignoradas.
+/// Valida e ordena o grafo de um dispositivo (precisa das caixas "in" e "out").
 pub fn plan(g: &Graph) -> Result<Plan, PlanError> {
+    plan_with(g, true)
+}
+
+/// Valida e ordena um fluxo independente (triggers → saídas; "in"/"out" não existem).
+pub fn plan_free(g: &Graph) -> Result<Plan, PlanError> {
+    plan_with(g, false)
+}
+
+/// Ordenação topológica de Kahn. Setas para nós inexistentes são ignoradas.
+fn plan_with(g: &Graph, require_io: bool) -> Result<Plan, PlanError> {
     let idx: HashMap<&str, usize> = g.nodes.iter().enumerate().map(|(i, n)| (n.id.as_str(), i)).collect();
-    let input = *idx.get(INPUT).ok_or(PlanError::MissingInputOrOutput)?;
-    let output = *idx.get(OUTPUT).ok_or(PlanError::MissingInputOrOutput)?;
+    let (input, output) = match (idx.get(INPUT), idx.get(OUTPUT)) {
+        (Some(&i), Some(&o)) => (i, o),
+        _ if require_io => return Err(PlanError::MissingInputOrOutput),
+        // fluxo independente: índices fora do grafo (nenhum nó é "in"/"out")
+        _ => (usize::MAX, usize::MAX),
+    };
     let n = g.nodes.len();
     let mut inputs: Vec<Vec<(usize, f32)>> = vec![vec![]; n];
     let mut outs: Vec<Vec<usize>> = vec![vec![]; n];
@@ -134,6 +150,7 @@ pub fn plan(g: &Graph) -> Result<Plan, PlanError> {
         return Err(PlanError::Cycle);
     }
     order.retain(|&i| i != input);
+    let _ = require_io;
     Ok(Plan { order, inputs, input, output })
 }
 
@@ -278,6 +295,24 @@ mod tests {
     fn fx_node_json() {
         let n: Node = serde_json::from_str(r#"{"id":"g","kind":"fx","fx":"gain","value":-6,"x":0,"y":0}"#).unwrap();
         assert_eq!(n.kind, NodeKind::Fx { fx: crate::blocks::Fx::Gain, value: -6.0 });
+    }
+
+    #[test]
+    fn free_flow_without_in_out() {
+        // trigger (programa) → ganho → envio, sem as caixas fixas
+        let g = Graph {
+            nodes: vec![
+                node("a", NodeKind::App { exe: "x.exe".into() }),
+                node("m", NodeKind::Mixer),
+                node("s", NodeKind::Send { device: "{d}".into() }),
+            ],
+            edges: vec![edge("a", "m", 0.5), edge("m", "s", 1.0)],
+        };
+        assert_eq!(plan(&g), Err(PlanError::MissingInputOrOutput));
+        let p = plan_free(&g).unwrap();
+        assert_eq!(p.order.len(), 3);
+        let pos = |id: &str| p.order.iter().position(|&i| g.nodes[i].id == id).unwrap();
+        assert!(pos("a") < pos("m") && pos("m") < pos("s"));
     }
 
     #[test]

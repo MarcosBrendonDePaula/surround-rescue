@@ -272,3 +272,23 @@ pre { white-space: pre-wrap; font-size: 11.5px; color: var(--soft); background: 
 @keyframes fl-flow { to { stroke-dashoffset: -14; } }
 @media (prefers-reduced-motion: reduce) { #fl-canvas .edge.live { animation: none; } }
 .fl-of { color: var(--soft); font-size: 13px; }
+
+/* lista lateral de fluxos */
+.fl-layout { display: grid; grid-template-columns: 230px 1fr; gap: 14px; }
+@media (max-width: 900px) { .fl-layout { grid-template-columns: 1fr; } }
+.fl-main { min-width: 0; }
+.fl-side { background: var(--surface); border-radius: 14px; padding: 12px; align-self: start; max-height: calc(100vh - 150px); overflow: auto; }
+.fl-side h3 { font: 600 11px var(--body); color: var(--soft); letter-spacing: .06em; text-transform: uppercase; margin: 6px 4px 2px; }
+.fl-side-hint { color: var(--soft); font-size: 11.5px; margin: 0 4px 8px; }
+.fl-side .pill { width: 100%; margin-top: 6px; }
+.fl-row { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; padding: 8px; border-radius: 9px; border: 1px solid transparent;
+  background: none; cursor: pointer; margin-bottom: 2px; }
+.fl-row:hover { background: var(--night); }
+.fl-row.active { background: var(--night); border-color: var(--amber); }
+.fl-row .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--line); flex: none; }
+.fl-row .dot.on { background: var(--ok); }
+.fl-row span.t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fl-row small { color: var(--soft); display: block; font-size: 11px; }
+#fl-name { font: 600 22px var(--display); min-width: 220px; background: transparent; border: 1px dashed var(--line); }
+.fl-when { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: -4px 0 12px; color: var(--soft); }
+.fl-stage { height: calc(100vh - 250px); }

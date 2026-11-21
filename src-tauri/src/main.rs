@@ -184,6 +184,30 @@ fn open_plugin_window(endpoint: String, index: usize, host: State<plugins::HostP
 }
 
 #[tauri::command]
+fn list_flows() -> Vec<plugins::FlowSummary> {
+    plugins::list_flows()
+}
+
+#[tauri::command]
+fn get_flow(id: String) -> Result<serde_json::Value, String> {
+    plugins::get_flow(&id)
+}
+
+#[tauri::command]
+fn set_flow(id: String, flow: serde_json::Value, host: State<plugins::HostProcess>) -> Result<(), String> {
+    plugins::set_flow(&id, &flow)?;
+    host.ensure();
+    Ok(())
+}
+
+#[tauri::command]
+fn delete_flow(id: String, host: State<plugins::HostProcess>) -> Result<(), String> {
+    plugins::delete_flow(&id)?;
+    host.ensure();
+    Ok(())
+}
+
+#[tauri::command]
 fn host_status(host: State<plugins::HostProcess>) -> serde_json::Value {
     serde_json::json!({ "running": host.running(), "found": plugins::host_exe().is_some() })
 }
@@ -228,7 +252,7 @@ fn main() {
         .plugin(tauri_plugin_single_instance::init(|app, _, _| show(app)))
         .manage(state)
         .manage(plugins::HostProcess(Mutex::new(None)))
-        .invoke_handler(tauri::generate_handler![get_snapshot, set_config, get_status, set_device_engine, set_autostart, preview, recent_apps, scan_plugins, get_chain, set_chain, host_status, open_plugin_window, audio_apps])
+        .invoke_handler(tauri::generate_handler![get_snapshot, set_config, get_status, set_device_engine, set_autostart, preview, recent_apps, scan_plugins, get_chain, set_chain, host_status, open_plugin_window, audio_apps, list_flows, get_flow, set_flow, delete_flow])
         .setup(|app| {
             let show_i = MenuItem::with_id(app, "show", "Abrir", true, None::<&str>)?;
             let toggle_i = MenuItem::with_id(app, "toggle", "Ligar/Desligar surround", true, None::<&str>)?;

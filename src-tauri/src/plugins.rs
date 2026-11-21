@@ -69,9 +69,74 @@ pub fn set_chain(endpoint: &str, chain: &Chain) -> Result<(), String> {
     std::fs::rename(&tmp, &f).map_err(|e| e.to_string())
 }
 
+// ---------------- fluxos independentes (com triggers) ----------------
+
+pub fn flows_dir() -> PathBuf {
+    chains_dir().parent().unwrap().join("flows")
+}
+
+/// Ids de fluxo: letras minúsculas, números e hífen (nunca caminhos).
+fn valid_flow_id(id: &str) -> bool {
+    !id.is_empty() && id.len() <= 48 && id.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FlowSummary {
+    pub id: String,
+    pub name: String,
+    pub enabled: bool,
+}
+
+pub fn list_flows() -> Vec<FlowSummary> {
+    let mut out = vec![];
+    if let Ok(rd) = std::fs::read_dir(flows_dir()) {
+        for e in rd.flatten() {
+            let p = e.path();
+            if p.extension().map(|x| x != "json").unwrap_or(true) {
+                continue;
+            }
+            let id = p.file_stem().unwrap().to_string_lossy().to_string();
+            let v: serde_json::Value = std::fs::read_to_string(&p).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
+            out.push(FlowSummary {
+                name: v["name"].as_str().filter(|n| !n.is_empty()).unwrap_or(&id).to_string(),
+                enabled: v["enabled"].as_bool().unwrap_or(false),
+                id,
+            });
+        }
+    }
+    out.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    out
+}
+
+pub fn get_flow(id: &str) -> Result<serde_json::Value, String> {
+    if !valid_flow_id(id) {
+        return Err("Fluxo inválido.".into());
+    }
+    let t = std::fs::read_to_string(flows_dir().join(format!("{id}.json"))).map_err(|e| e.to_string())?;
+    serde_json::from_str(&t).map_err(|e| e.to_string())
+}
+
+pub fn set_flow(id: &str, flow: &serde_json::Value) -> Result<(), String> {
+    if !valid_flow_id(id) {
+        return Err("Fluxo inválido.".into());
+    }
+    std::fs::create_dir_all(flows_dir()).map_err(|e| e.to_string())?;
+    let f = flows_dir().join(format!("{id}.json"));
+    let tmp = f.with_extension("tmp");
+    std::fs::write(&tmp, serde_json::to_string_pretty(flow).unwrap()).map_err(|e| e.to_string())?;
+    std::fs::rename(&tmp, &f).map_err(|e| e.to_string())
+}
+
+pub fn delete_flow(id: &str) -> Result<(), String> {
+    if !valid_flow_id(id) {
+        return Err("Fluxo inválido.".into());
+    }
+    std::fs::remove_file(flows_dir().join(format!("{id}.json"))).map_err(|e| e.to_string())
+}
+
 /// Pede ao executor para abrir a janela do plugin `index` (posição na lista) do dispositivo.
 pub fn open_window(endpoint: &str, index: usize, host: &HostProcess) -> Result<(), String> {
-    if !valid_endpoint(endpoint) {
+    if !valid_endpoint(endpoint) && !valid_flow_id(endpoint) {
         return Err("Dispositivo inválido.".into());
     }
     if !host.running() {
@@ -117,9 +182,10 @@ pub struct HostProcess(pub Mutex<Option<std::process::Child>>);
 
 impl HostProcess {
     pub fn ensure(&self) {
-        let any = std::fs::read_dir(chains_dir())
-            .map(|rd| rd.flatten().any(|e| e.path().extension().map(|x| x == "json").unwrap_or(false)))
-            .unwrap_or(false);
+        let has_json = |d: PathBuf| {
+            std::fs::read_dir(d).map(|rd| rd.flatten().any(|e| e.path().extension().map(|x| x == "json").unwrap_or(false))).unwrap_or(false)
+        };
+        let any = has_json(chains_dir()) || has_json(flows_dir());
         let mut g = self.0.lock().unwrap();
         let alive = g.as_mut().map(|c| matches!(c.try_wait(), Ok(None))).unwrap_or(false);
         if any && !alive {
@@ -149,6 +215,14 @@ impl Drop for HostProcess {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn flow_id_validation() {
+        assert!(valid_flow_id("musica-no-discord-1"));
+        assert!(!valid_flow_id("../x"));
+        assert!(!valid_flow_id(""));
+        assert!(!valid_flow_id("Maiuscula"));
+    }
 
     #[test]
     fn endpoint_validation() {

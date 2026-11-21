@@ -166,13 +166,31 @@
 
       <!-- FLUXO -->
       <section id="tab-fluxo" class="tab">
+        <div class="fl-layout">
+        <aside class="fl-side" aria-label="Fluxos">
+          <h3>Dispositivos</h3>
+          <p class="fl-side-hint">O som que passa por eles. Efeito sem atraso.</p>
+          <div id="fl-side-dev"></div>
+          <h3>Meus fluxos</h3>
+          <p class="fl-side-hint">Começam em triggers (programas, microfones) e enviam para onde quiser.</p>
+          <div id="fl-side-flows"></div>
+          <button class="pill" id="fl-new-flow">+ Novo fluxo</button>
+        </aside>
+        <div class="fl-main">
         <div class="fl-head">
-          <h1>Fluxo de áudio</h1>
-          <label class="fl-of" for="fl-device">Fluxo de:</label>
-          <select id="fl-device" aria-label="Dispositivo cujo fluxo está sendo editado"></select>
+          <h1 id="fl-title">Fluxo de áudio</h1>
+          <input type="text" id="fl-name" aria-label="Nome do fluxo" hidden>
+          <label class="toggle" id="fl-enabled-wrap" hidden><input type="checkbox" id="fl-enabled"><span></span>Ligado</label>
           <span class="fl-saved" id="fl-saved"></span>
           <button class="pill" id="fl-serial" title="Desfaz o desenho e volta a uma fila simples">Organizar em fila</button>
+          <button class="pill" id="fl-delete" hidden>Excluir fluxo</button>
           <button class="pill solid" id="fl-open-creator">+ Adicionar</button>
+        </div>
+        <div class="fl-when" id="fl-when" hidden>
+          <span>Rodar</span>
+          <select id="fl-when-mode"><option value="always">sempre que estiver ligado</option><option value="exe">só quando este programa estiver aberto:</option></select>
+          <input type="text" id="fl-when-exe" placeholder="discord.exe" list="fl-when-list" hidden>
+          <datalist id="fl-when-list"></datalist>
         </div>
         <div class="fl-stage">
           <svg id="fl-canvas" aria-label="Editor de fluxo"></svg>
@@ -191,6 +209,8 @@
             <div id="fl-catalog" class="fl-catalog"></div>
           </aside>
           <aside class="fl-drawer" id="fl-panel" hidden></aside>
+        </div>
+        </div>
         </div>
       </section>
 

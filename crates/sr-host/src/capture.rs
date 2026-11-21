@@ -22,6 +22,19 @@ pub enum Source {
     App(String),
     /// {guid} de um dispositivo de entrada
     Device(String),
+    /// {guid} de uma SAÍDA: tudo o que toca nela, depois da mistura do Windows
+    Listen(String),
+}
+
+/// Como o cliente de áudio foi aberto.
+#[derive(Clone, Copy, PartialEq)]
+enum Mode {
+    /// captura por processo (o processo pode fechar)
+    Process,
+    /// entrada comum (microfone)
+    Input,
+    /// loopback de uma saída
+    Loopback,
 }
 
 pub struct Capture {
@@ -49,7 +62,8 @@ impl Capture {
                             continue;
                         }
                     },
-                    Source::Device(id) => run(activate_device(id), flow_rate, &mut prod, &mut input, &st, log, id),
+                    Source::Device(id) => run(activate_device(id, false), flow_rate, &mut prod, &mut input, &st, log, id),
+                    Source::Listen(id) => run(activate_device(id, true), flow_rate, &mut prod, &mut input, &st, log, id),
                 };
                 if let Err(e) = r {
                     log(&format!("captura: {e} (tentando de novo)"));
@@ -104,7 +118,7 @@ impl IActivateAudioInterfaceCompletionHandler_Impl for Done_Impl {
 }
 
 /// Ativa a captura por processo e devolve o cliente com o formato que vamos pedir.
-unsafe fn activate_process(pid: u32) -> Result<(IAudioClient, Vec<u8>, bool)> {
+unsafe fn activate_process(pid: u32) -> Result<(IAudioClient, Vec<u8>, Mode)> {
     let mut params = AUDIOCLIENT_ACTIVATION_PARAMS {
         ActivationType: AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK,
         Anonymous: AUDIOCLIENT_ACTIVATION_PARAMS_0 {
@@ -133,7 +147,7 @@ unsafe fn activate_process(pid: u32) -> Result<(IAudioClient, Vec<u8>, bool)> {
     let client: IAudioClient = unk.ok_or(Error::from(E_FAIL))?.cast()?;
     // a captura por processo não informa formato: pedimos float 32 estéreo 48 kHz
     let f = WAVEFORMATEX { wFormatTag: 3, nChannels: 2, nSamplesPerSec: 48000, nAvgBytesPerSec: 48000 * 8, nBlockAlign: 8, wBitsPerSample: 32, cbSize: 0 };
-    Ok((client, fmt_bytes(&f), true))
+    Ok((client, fmt_bytes(&f), Mode::Process))
 }
 
 /// Bytes de um formato (cabeçalho + extensão `cbSize`), para não perder a parte "extensível".
@@ -142,20 +156,22 @@ unsafe fn fmt_bytes(f: *const WAVEFORMATEX) -> Vec<u8> {
     std::slice::from_raw_parts(f as *const u8, len).to_vec()
 }
 
-unsafe fn activate_device(id: &str) -> Result<(IAudioClient, Vec<u8>, bool)> {
+/// `listen` = true: abre uma SAÍDA em loopback (ouve o que toca nela); false: uma entrada.
+unsafe fn activate_device(id: &str, listen: bool) -> Result<(IAudioClient, Vec<u8>, Mode)> {
     let en: IMMDeviceEnumerator = CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)?;
-    let dev = en.GetDevice(&HSTRING::from(format!("{{0.0.1.00000000}}.{}", id.to_lowercase())))?;
+    let prefix = if listen { "{0.0.0.00000000}" } else { "{0.0.1.00000000}" };
+    let dev = en.GetDevice(&HSTRING::from(format!("{prefix}.{}", id.to_lowercase())))?;
     let client: IAudioClient = dev.Activate(CLSCTX_ALL, None)?;
     // usa o formato do próprio Windows, inteiro (antes só o cabeçalho era copiado e o
     // Windows lia lixo na extensão → "Parâmetro incorreto")
     let mix = client.GetMixFormat()?;
     let f = fmt_bytes(mix);
     CoTaskMemFree(Some(mix as *const _));
-    Ok((client, f, false))
+    Ok((client, f, if listen { Mode::Loopback } else { Mode::Input }))
 }
 
 unsafe fn run(
-    act: Result<(IAudioClient, Vec<u8>, bool)>,
+    act: Result<(IAudioClient, Vec<u8>, Mode)>,
     flow_rate: u32,
     prod: &mut Option<ring::Producer>,
     input: &mut Option<Input>,
@@ -163,9 +179,14 @@ unsafe fn run(
     log: fn(&str),
     what: &str,
 ) -> Result<()> {
-    let (client, fmt_raw, loopback) = act?;
+    let (client, fmt_raw, mode) = act?;
     let fmt = *(fmt_raw.as_ptr() as *const WAVEFORMATEX);
-    let flags = AUDCLNT_STREAMFLAGS_EVENTCALLBACK | if loopback { AUDCLNT_STREAMFLAGS_LOOPBACK | AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM } else { 0 };
+    let flags = AUDCLNT_STREAMFLAGS_EVENTCALLBACK
+        | match mode {
+            Mode::Process => AUDCLNT_STREAMFLAGS_LOOPBACK | AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM,
+            Mode::Loopback => AUDCLNT_STREAMFLAGS_LOOPBACK,
+            Mode::Input => 0,
+        };
     // 20 ms de buffer
     client.Initialize(AUDCLNT_SHAREMODE_SHARED, flags, 200_000, 0, fmt_raw.as_ptr() as *const WAVEFORMATEX, None)?;
     let ev = CreateEventW(None, false, false, None)?;
@@ -186,7 +207,7 @@ unsafe fn run(
         if WaitForSingleObject(ev, 100) != WAIT_OBJECT_0 {
             // processo de loopback que fechou não sinaliza mais: confere se ainda existe
             idle += 1;
-            if loopback && idle > 30 && find_pid(what).is_none() {
+            if mode == Mode::Process && idle > 30 && find_pid(what).is_none() {
                 break;
             }
             continue;
