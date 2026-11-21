@@ -76,15 +76,41 @@ function flSideStats() {
 setInterval(flPollStats, 1000);
 
 // blocos nativos: nome, unidade, faixa e valor inicial
+// Ícones de traço (grade 24), no lugar de emojis: iguais em qualquer Windows e na cor de cada tipo.
+const ICONS = {
+  pc: "M3 5h18v11H3zM8 20h8M12 16v4",
+  out: "M4 9h4l5-4v14l-5-4H4zM16.5 8.5a5 5 0 0 1 0 7M19 6a8.5 8.5 0 0 1 0 12",
+  mic: "M12 3a3 3 0 0 1 3 3v5a3 3 0 0 1-6 0V6a3 3 0 0 1 3-3zM5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21",
+  tomic: "M10 3a3 3 0 0 1 3 3v5a3 3 0 0 1-6 0V6a3 3 0 0 1 3-3zM3.5 11a6.5 6.5 0 0 0 11.2 4.5M10 17.5V21M18 7v7M14.5 10.5h7",
+  app: "M3 5h18v14H3zM3 9h18M10 12l5 2.5-5 2.5z",
+  listen: "M4 15v-3a8 8 0 0 1 16 0v3M4 15h3v5H4zM17 15h3v5h-3z",
+  send: "M14 4h6v6M20 4l-9 9M18 14v5H5V6h5",
+  mixer: "M6 4v16M12 4v16M18 4v16M4 14h4M10 8h4M16 16h4",
+  vst: "M9 3v5M15 3v5M6 8h12v3a6 6 0 0 1-12 0zM12 17v4",
+  star: "M12 3l2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1L3.2 9.5l6.1-.9z",
+  gain: "M4 19h16V5zM4 19l16-14",
+  invert: "M3 12c3-6 6-6 9 0s6 6 9 0M3 12c3 6 6 6 9 0s6-6 9 0",
+  pan: "M4 12h16M4 12l3-3M4 12l3 3M20 12l-3-3M20 12l-3 3M12 8v8",
+  mono: "M5 5l7 7 7-7M12 12v8",
+  swap: "M4 8h15l-3-3M20 16H5l3 3",
+  delay: "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM12 7v5l3 2",
+  lowpass: "M3 8h9c3 0 4 3 5 6s2 4 4 4",
+  highpass: "M3 18c2 0 3-1 4-4s2-6 5-6h9",
+  unknown: "M9 9a3 3 0 1 1 4 2.8c-.7.3-1 1-1 1.7V14M12 18h.01",
+};
+const iconPath = (k) => ICONS[k] || ICONS.unknown;
+/// Ícone para HTML (catálogo, mesa de som).
+const iconHtml = (k) => `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="${iconPath(k)}"/></svg>`;
+
 const FX = {
-  gain: { name: "Ganho", unit: "dB", min: -60, max: 24, step: 0.5, def: 0, glyph: "dB", desc: "Aumenta ou diminui o volume" },
-  invert: { name: "Inverter", glyph: "−", desc: "Inverte a fase. Somado com o original, subtrai", hint: "somado = subtrai" },
-  pan: { name: "Pan", unit: "", min: -100, max: 100, step: 1, def: 0, glyph: "↔", desc: "Joga o som para um lado" },
-  mono: { name: "Mono", glyph: "M", desc: "Junta esquerda e direita", hint: "L e R viram um só" },
-  swap: { name: "Trocar L/R", glyph: "⇄", desc: "Inverte os lados", hint: "inverte os lados" },
-  delay: { name: "Atraso", unit: "ms", min: 0, max: 500, step: 1, def: 50, glyph: "⏱", desc: "Atrasa o som (eco, alinhar caminhos)" },
-  lowpass: { name: "Passa-baixa", unit: "Hz", min: 200, max: 20000, step: 50, def: 8000, glyph: "◟", desc: "Corta os agudos" },
-  highpass: { name: "Passa-alta", unit: "Hz", min: 20, max: 2000, step: 5, def: 120, glyph: "◝", desc: "Corta os graves" },
+  gain: { name: "Ganho", unit: "dB", min: -60, max: 24, step: 0.5, def: 0, glyph: "gain", desc: "Aumenta ou diminui o volume" },
+  invert: { name: "Inverter", glyph: "invert", desc: "Inverte a fase. Somado com o original, subtrai", hint: "somado = subtrai" },
+  pan: { name: "Pan", unit: "", min: -100, max: 100, step: 1, def: 0, glyph: "pan", desc: "Joga o som para um lado" },
+  mono: { name: "Mono", glyph: "mono", desc: "Junta esquerda e direita", hint: "L e R viram um só" },
+  swap: { name: "Trocar L/R", glyph: "swap", desc: "Inverte os lados", hint: "inverte os lados" },
+  delay: { name: "Atraso", unit: "ms", min: 0, max: 500, step: 1, def: 50, glyph: "delay", desc: "Atrasa o som (eco, alinhar caminhos)" },
+  lowpass: { name: "Passa-baixa", unit: "Hz", min: 200, max: 20000, step: 50, def: 8000, glyph: "lowpass", desc: "Corta os agudos" },
+  highpass: { name: "Passa-alta", unit: "Hz", min: 20, max: 2000, step: 5, def: 120, glyph: "highpass", desc: "Corta os graves" },
 };
 
 // ---------- dados ----------
@@ -148,31 +174,31 @@ function nodeInfo(n) {
   switch (n.kind) {
     case "input": {
       const d = devName(owner());
-      return d?.kind === "Microfone" ? [`Voz: ${d.device || d.name}`, "o que o microfone capta", "🎙"] : ["Windows", "som de todos os programas", "♪"];
+      return d?.kind === "Microfone" ? [`Voz: ${d.device || d.name}`, "o que o microfone capta", "mic"] : ["Windows", "som de todos os programas", "pc"];
     }
     case "output": {
       const d = devName(owner());
-      return d?.kind === "Microfone" ? ["Saída do microfone", "o que o Discord e os outros programas recebem", "◉"] : ["Saída", d ? `toca em ${d.device || d.name}` : "Surround Rescue + anti-estouro", "◉"];
+      return d?.kind === "Microfone" ? ["Saída do microfone", "o que o Discord e os outros programas recebem", "out"] : ["Saída", d ? `toca em ${d.device || d.name}` : "Surround Rescue + anti-estouro", "out"];
     }
-    case "mixer": return ["Mixer", "soma o que chega", "Σ"];
-    case "app": return [n.exe || "Programa", "som só deste programa", "▶"];
-    case "listen": { const d = devName(n.device); return [d ? `Ouvir: ${d.device || d.name}` : "Ouvir saída", d ? `${d.name} · tudo o que toca nela` : "escolha a saída", "👂"]; }
-    case "receive": { const d = devName(n.device); return [d ? (d.device || d.name) : "Entrada", d ? d.name : "escolha a entrada", "🎙"]; }
-    case "tomic": { const d = devName(n.device); return [d ? `Para o mic: ${d.device || d.name}` : "Mandar para o microfone", d ? `${d.name} · somado à voz` : "escolha o microfone", "🎙"]; }
-    case "send": { const d = devName(n.device); return [d ? `Enviar: ${d.device || d.name}` : "Enviar", d ? `${d.name} · ~30 ms depois` : "escolha o destino", "↗"]; }
-    case "fx": { const f = FX[n.fx] || { name: n.fx, glyph: "?" }; return [f.name, f.unit !== undefined ? `${n.value} ${f.unit}`.trim() : f.hint || "bloco nativo", f.glyph]; }
+    case "mixer": return ["Mixer", "soma o que chega", "mixer"];
+    case "app": return [n.exe || "Programa", "som só deste programa", "app"];
+    case "listen": { const d = devName(n.device); return [d ? `Ouvir: ${d.device || d.name}` : "Ouvir saída", d ? `${d.name} · tudo o que toca nela` : "escolha a saída", "listen"]; }
+    case "receive": { const d = devName(n.device); return [d ? (d.device || d.name) : "Entrada", d ? d.name : "escolha a entrada", "mic"]; }
+    case "tomic": { const d = devName(n.device); return [d ? `Para o mic: ${d.device || d.name}` : "Mandar para o microfone", d ? `${d.name} · somado à voz` : "escolha o microfone", "tomic"]; }
+    case "send": { const d = devName(n.device); return [d ? `Enviar: ${d.device || d.name}` : "Enviar", d ? `${d.name} · ~30 ms depois` : "escolha o destino", "send"]; }
+    case "fx": { const f = FX[n.fx] || { name: n.fx, glyph: "unknown" }; return [f.name, f.unit !== undefined ? `${n.value} ${f.unit}`.trim() : f.hint || "bloco nativo", f.glyph]; }
     case "rack": {
       const list = (n.plugins || []).map((i) => doc().plugins[i]).filter(Boolean);
-      if (list.length === 1) { const p = list[0]; return [plName(p), p.enabled ? `VST · ${plFormat(p)}` : "VST · desligado", "✦"]; }
+      if (list.length === 1) { const p = list[0]; return [plName(p), p.enabled ? `VST · ${plFormat(p)}` : "VST · desligado", "vst"]; }
       const names = list.map((p) => (p.enabled ? "" : "⏻") + plName(p));
-      return ["VST", names.length ? names.join(" → ") : "vazio: clique para escolher o plugin", "✦"];
+      return ["VST", names.length ? names.join(" → ") : "vazio: clique para escolher o plugin", "vst"];
     }
     case "plugin": {
       const p = doc().plugins[n.plugin];
-      return [p ? baseName(p.path) : "(plugin removido)", p && !p.enabled ? "desligado" : /\.dll$/i.test(p?.path || "") ? "plugin VST2" : /\.clap$/i.test(p?.path || "") ? "plugin CLAP" : "plugin VST3", "✦"];
+      return [p ? baseName(p.path) : "(plugin removido)", p && !p.enabled ? "desligado" : /\.dll$/i.test(p?.path || "") ? "plugin VST2" : /\.clap$/i.test(p?.path || "") ? "plugin CLAP" : "plugin VST3", "vst"];
     }
   }
-  return [n.kind, "", "?"];
+  return [n.kind, "", "unknown"];
 }
 
 // ---------- desenho ----------
@@ -217,13 +243,13 @@ function flRender() {
       tools.push([`▣`, `data-tool="open" data-id="${esc(n.id)}"`, ""]);
       tools.push([`⏻`, `data-tool="toggle" data-id="${esc(n.id)}"`, ""]);
     }
-    if (!["input", "output"].includes(n.kind)) tools.push([`🗑`, `data-tool="del" data-id="${esc(n.id)}"`, "danger"]);
+    if (!["input", "output"].includes(n.kind)) tools.push([`×`, `data-tool="del" data-id="${esc(n.id)}"`, "danger"]);
     const toolsSvg = tools.map(([l, a, c], k) => btn(W - 14 - 28 * (tools.length - 1 - k), -18, l, a, c)).join("");
     s += `<g class="${cls}" data-node="${esc(n.id)}" transform="translate(${n.x} ${n.y})">
       <rect class="card" width="${W}" height="${H}" rx="12"/>
       <rect class="stripe" x="0" y="12" width="4" height="${H - 24}" rx="2"/>
       <rect class="badge" x="14" y="12" width="40" height="40" rx="10"/>
-      <text class="glyph" x="34" y="32">${glyph}</text>
+      <svg class="glyph" x="23" y="21" width="22" height="22" viewBox="0 0 24 24"><path d="${iconPath(glyph)}"/></svg>
       <text class="title" x="66" y="28">${esc(trunc(title, 20))}</text>
       <text class="sub" x="66" y="46">${esc(trunc(sub, 26))}</text>
       ${!["input", "app", "receive", "listen"].includes(n.kind) ? `<circle class="port in" data-port-in="${esc(n.id)}" cx="0" cy="${H / 2}" r="7"/>` : ""}
@@ -374,9 +400,9 @@ const dbText = (g) => (g <= 0.001 ? "−∞" : `${toDb(g) > 0 ? "+" : ""}${fmt(t
 
 function mixStrip(g, e, i) {
   const src = g.nodes.find((x) => x.id === e.from);
-  const [name, , glyph] = src ? nodeInfo(src) : ["?", "", "?"];
+  const [name, , glyph] = src ? nodeInfo(src) : ["?", "", "unknown"];
   return `<div class="strip${e.mute ? " muted" : ""}" data-edge-i="${i}">
-    <span class="strip-ic">${glyph}</span>
+    <span class="strip-ic">${iconHtml(glyph)}</span>
     <output class="strip-db">${dbText(e.gain)}</output>
     <input type="range" class="fader" min="-60" max="6" step="0.5" value="${toDb(e.gain)}" aria-label="Volume de ${esc(name)}">
     <button class="strip-mute" title="Mudo">M</button>
@@ -437,21 +463,21 @@ function catalogItems() {
   const onMic = devName(owner())?.kind === "Microfone";
   return [
     [onMic ? "Misturar na voz" : "Entradas", [
-      ...FL.apps.map((a) => ({ k: "app", ic: "▶", t: a, d: "Som só deste programa (tocando agora)", node: { kind: "app", exe: a } })),
-      { k: "app", ic: "▶", t: "Capturar programa…", d: "Um player, o navegador, um jogo — escolha o .exe depois", node: { kind: "app", exe: "" } },
-      ...ins.map((d) => ({ k: "app", ic: "🎙", t: d.device || d.name, d: `Receber de: ${d.name}`, node: { kind: "receive", device: d.id } })),
-      ...outs.map((d) => ({ k: "app", ic: "👂", t: `Ouvir: ${d.device || d.name}`, d: `${d.name} · tudo o que toca nesta saída`, node: { kind: "listen", device: d.id } })),
+      ...FL.apps.map((a) => ({ k: "app", ic: "app", t: a, d: "Som só deste programa (tocando agora)", node: { kind: "app", exe: a } })),
+      { k: "app", ic: "app", t: "Capturar programa…", d: "Um player, o navegador, um jogo — escolha o .exe depois", node: { kind: "app", exe: "" } },
+      ...ins.map((d) => ({ k: "app", ic: "mic", t: d.device || d.name, d: `Receber de: ${d.name}`, node: { kind: "receive", device: d.id } })),
+      ...outs.map((d) => ({ k: "app", ic: "listen", t: `Ouvir: ${d.device || d.name}`, d: `${d.name} · tudo o que toca nesta saída`, node: { kind: "listen", device: d.id } })),
     ]],
     ["Efeitos nativos", Object.entries(FX).map(([id, f]) => ({ k: "fx", ic: f.glyph, t: f.name, d: f.desc, node: { kind: "fx", fx: id, value: f.def ?? 0 } }))],
     ["VST", [
-      { k: "plugin", ic: "✦", t: "VST", d: "Escolha o plugin (VST3, VST2, CLAP); dá para pôr vários em fila", browser: true },
+      { k: "plugin", ic: "vst", t: "VST", d: "Escolha o plugin (VST3, VST2, CLAP); dá para pôr vários em fila", browser: true },
       ...PL.found.filter((f) => f.supported !== false && pbFavs().includes(pbKey(f)))
-        .map((f) => ({ k: "plugin", ic: "★", t: f.name || baseName(f.path), d: `favorito · ${f.format || "VST3"}`, plugin: f.path })),
+        .map((f) => ({ k: "plugin", ic: "star", t: f.name || baseName(f.path), d: `favorito · ${f.format || "VST3"}`, plugin: f.path })),
     ]],
-    ["Saídas", outs.map((d) => ({ k: "send", ic: "↗", t: `Enviar: ${d.device || d.name}`, d: d.name, node: { kind: "send", device: d.id } }))],
+    ["Saídas", outs.map((d) => ({ k: "send", ic: "send", t: `Enviar: ${d.device || d.name}`, d: d.name, node: { kind: "send", device: d.id } }))],
     ["Mandar para o microfone", PL.devices.filter((d) => d.kind === "Microfone" && d.id !== owner())
-      .map((d) => ({ k: "send", ic: "🎙", t: `Para o mic: ${d.device || d.name}`, d: `${d.name} · o Discord recebe junto com a voz`, node: { kind: "tomic", device: d.id } }))],
-    ["Utilitários", [{ k: "mixer", ic: "Σ", t: "Mixer", d: "Soma vários caminhos", node: { kind: "mixer" } }]],
+      .map((d) => ({ k: "send", ic: "tomic", t: `Para o mic: ${d.device || d.name}`, d: `${d.name} · o Discord recebe junto com a voz`, node: { kind: "tomic", device: d.id } }))],
+    ["Utilitários", [{ k: "mixer", ic: "mixer", t: "Mixer", d: "Soma vários caminhos", node: { kind: "mixer" } }]],
   ];
 }
 
@@ -466,7 +492,7 @@ function flCatalog() {
     html += `<h3>${esc(cat)}</h3>`;
     for (const it of vis) {
       FL.catalog.push(it);
-      html += `<button class="fl-item k-${it.k}" data-cat="${idx++}"><span class="ic">${esc(it.ic)}</span><span><b>${esc(trunc(it.t, 30))}</b><small>${esc(it.d)}</small></span></button>`;
+      html += `<button class="fl-item k-${it.k}" data-cat="${idx++}"><span class="ic">${iconHtml(it.ic)}</span><span><b>${esc(trunc(it.t, 30))}</b><small>${esc(it.d)}</small></span></button>`;
     }
   }
   $("#fl-catalog").innerHTML = html || `<p class="desc">Nada encontrado para "${esc(q)}".</p>`;

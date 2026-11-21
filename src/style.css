@@ -222,7 +222,7 @@ pre { white-space: pre-wrap; font-size: 11.5px; color: var(--soft); background: 
 #fl-canvas .node:hover .card { stroke: color-mix(in srgb, var(--kind) 70%, var(--line)); }
 #fl-canvas .node.sel .card { stroke: var(--kind); stroke-width: 2.5; }
 #fl-canvas .node .badge { fill: color-mix(in srgb, var(--kind) 22%, transparent); }
-#fl-canvas .node .glyph { fill: var(--kind); font: 700 17px var(--display); text-anchor: middle; dominant-baseline: central; pointer-events: none; }
+#fl-canvas .node .glyph { fill: none; stroke: var(--kind); stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; pointer-events: none; overflow: visible; }
 #fl-canvas .node .title { fill: var(--ink); font: 600 14px var(--display); pointer-events: none; }
 #fl-canvas .node .sub { fill: var(--soft); font: 11.5px var(--body); pointer-events: none; }
 #fl-canvas .node .stripe { fill: var(--kind); }
@@ -373,3 +373,7 @@ pre { white-space: pre-wrap; font-size: 11.5px; color: var(--soft); background: 
 .rk-name small { margin-left: 6px; color: var(--soft); font-size: 11px; }
 .rk-row .icon { width: 24px; height: 24px; font-size: 11px; }
 .rk-row .icon[disabled] { opacity: .3; cursor: default; }
+
+/* ícones de traço (catálogo, mesa de som) */
+.ico { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
+.strip-ic .ico { width: 15px; height: 15px; }
