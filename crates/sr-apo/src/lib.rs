@@ -69,19 +69,105 @@ pub fn reg_properties() -> APO_REG_PROPERTIES {
     }
 }
 
-/// Aceita só float de 32 bits (o formato interno do mixer do Windows).
-fn format_ok(t: &IAudioMediaType) -> bool {
-    let mut f = UNCOMPRESSEDAUDIOFORMAT::default();
-    unsafe { t.GetUncompressedAudioFormat(&mut f) }.is_ok()
-        && f.guidFormatType == FLOAT_SUBTYPE
-        && f.dwBytesPerSampleContainer == 4
-        && (1..=32).contains(&f.dwSamplesPerFrame)
+/// PCM inteiro (KSDATAFORMAT_SUBTYPE_PCM)
+const PCM_SUBTYPE: GUID = GUID::from_u128(0x00000001_0000_0010_8000_00aa00389b71);
+
+/// Como as amostras estão guardadas no buffer do Windows.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Sample {
+    F32,
+    /// PCM inteiro: bytes por amostra no buffer (2, 3 ou 4) e bits válidos
+    Int { bytes: u32, bits: u32 },
+    /// Formato que não sabemos processar: aceitamos e deixamos passar sem tocar
+    /// (um APO nunca pode impedir o dispositivo de abrir).
+    Passthrough,
 }
 
-fn format_info(t: &IAudioMediaType) -> Option<(f64, usize)> {
+/// Saídas costumam vir em float 32; microfones (pré-mix de captura) vêm em PCM inteiro.
+fn sample_kind(f: &UNCOMPRESSEDAUDIOFORMAT) -> Option<Sample> {
+    if !(1..=32).contains(&f.dwSamplesPerFrame) {
+        return None;
+    }
+    if f.guidFormatType == FLOAT_SUBTYPE && f.dwBytesPerSampleContainer == 4 {
+        return Some(Sample::F32);
+    }
+    if f.guidFormatType == PCM_SUBTYPE && matches!(f.dwBytesPerSampleContainer, 2 | 3 | 4) {
+        let bits = if f.dwValidBitsPerSample == 0 { f.dwBytesPerSampleContainer * 8 } else { f.dwValidBitsPerSample };
+        return Some(Sample::Int { bytes: f.dwBytesPerSampleContainer, bits });
+    }
+    None
+}
+
+/// Aceita qualquer formato: o que não sabemos processar passa direto.
+fn format_ok(t: &IAudioMediaType) -> bool {
     let mut f = UNCOMPRESSEDAUDIOFORMAT::default();
-    unsafe { t.GetUncompressedAudioFormat(&mut f) }.ok()?;
-    Some((f.fFramesPerSecond as f64, f.dwSamplesPerFrame as usize))
+    let r = unsafe { t.GetUncompressedAudioFormat(&mut f) };
+    log(&format!(
+        "  formato: ok={} tipo={:?} canais={} bytes={} bits={} taxa={} comprimido={:?}",
+        r.is_ok(), f.guidFormatType, f.dwSamplesPerFrame, f.dwBytesPerSampleContainer, f.dwValidBitsPerSample, f.fFramesPerSecond,
+        unsafe { t.IsCompressedFormat() }.map(|b| b.as_bool())
+    ));
+    true
+}
+
+fn format_info(t: &IAudioMediaType) -> Option<(f64, usize, Sample)> {
+    let mut f = UNCOMPRESSEDAUDIOFORMAT::default();
+    if unsafe { t.GetUncompressedAudioFormat(&mut f) }.is_err() {
+        return Some((48000.0, 0, Sample::Passthrough));
+    }
+    let kind = sample_kind(&f).unwrap_or(Sample::Passthrough);
+    Some((f.fFramesPerSecond as f64, f.dwSamplesPerFrame as usize, kind))
+}
+
+/// Converte o buffer do Windows para float (no `scratch`) e de volta, para formatos inteiros.
+pub fn to_float(raw: *const u8, kind: Sample, out: &mut [f32]) {
+    unsafe {
+        match kind {
+            Sample::F32 => out.copy_from_slice(std::slice::from_raw_parts(raw as *const f32, out.len())),
+            Sample::Int { bytes: 2, .. } => {
+                let src = std::slice::from_raw_parts(raw as *const i16, out.len());
+                out.iter_mut().zip(src).for_each(|(o, s)| *o = *s as f32 / 32768.0);
+            }
+            Sample::Int { bytes: 3, .. } => {
+                for (i, o) in out.iter_mut().enumerate() {
+                    let p = raw.add(i * 3);
+                    let v = ((*p as i32) << 8 | (*p.add(1) as i32) << 16 | (*p.add(2) as i32) << 24) >> 8;
+                    *o = v as f32 / 8_388_608.0;
+                }
+            }
+            Sample::Passthrough => {}
+            Sample::Int { .. } => {
+                let src = std::slice::from_raw_parts(raw as *const i32, out.len());
+                out.iter_mut().zip(src).for_each(|(o, s)| *o = *s as f32 / 2_147_483_648.0);
+            }
+        }
+    }
+}
+
+pub fn from_float(src: &[f32], kind: Sample, raw: *mut u8) {
+    unsafe {
+        match kind {
+            Sample::F32 => std::slice::from_raw_parts_mut(raw as *mut f32, src.len()).copy_from_slice(src),
+            Sample::Int { bytes: 2, .. } => {
+                let dst = std::slice::from_raw_parts_mut(raw as *mut i16, src.len());
+                dst.iter_mut().zip(src).for_each(|(d, s)| *d = (s.clamp(-1.0, 1.0) * 32767.0).round() as i16);
+            }
+            Sample::Int { bytes: 3, .. } => {
+                for (i, s) in src.iter().enumerate() {
+                    let v = (s.clamp(-1.0, 1.0) * 8_388_607.0).round() as i32;
+                    let p = raw.add(i * 3);
+                    *p = v as u8;
+                    *p.add(1) = (v >> 8) as u8;
+                    *p.add(2) = (v >> 16) as u8;
+                }
+            }
+            Sample::Passthrough => {}
+            Sample::Int { .. } => {
+                let dst = std::slice::from_raw_parts_mut(raw as *mut i32, src.len());
+                dst.iter_mut().zip(src).for_each(|(d, s)| *d = (s.clamp(-1.0, 1.0) as f64 * 2_147_483_647.0).round() as i32);
+            }
+        }
+    }
 }
 
 // =====================================================================
@@ -98,11 +184,13 @@ struct Core {
     locked: AtomicBool,
     /// Acesso exclusivo do APOProcess enquanto travado (o Windows não chama em paralelo com Lock/Unlock).
     rt: UnsafeCell<Option<Engine>>,
+    /// Formato das amostras e buffer float de trabalho (criado no Lock, fora do tempo real)
+    fmt: UnsafeCell<(Sample, Vec<f32>)>,
 }
 
 impl Core {
     fn new() -> Core {
-        Core { setup: Mutex::new(Setup::default()), locked: AtomicBool::new(false), rt: UnsafeCell::new(None) }
+        Core { setup: Mutex::new(Setup::default()), locked: AtomicBool::new(false), rt: UnsafeCell::new(None), fmt: UnsafeCell::new((Sample::F32, vec![])) }
     }
 
     fn initialize(&self, size: u32, data: *const u8) -> HRESULT {
@@ -133,9 +221,12 @@ impl Core {
         }
         let input = unsafe { &**ins };
         let Some(fmt) = input.pFormat.as_ref() else { return E_POINTER };
-        let Some((sr, ch)) = format_info(fmt) else { return APOERR_FORMAT_NOT_SUPPORTED };
+        let Some((sr, ch, kind)) = format_info(fmt) else { return APOERR_FORMAT_NOT_SUPPORTED };
         let setup = self.setup.lock().unwrap();
-        log(&format!("LockForProcess taxa={sr} canais={ch} dispositivo={:?}", setup.endpoint));
+        log(&format!("LockForProcess taxa={sr} canais={ch} amostra={kind:?} dispositivo={:?}", setup.endpoint));
+        // buffer de trabalho para o maior bloco que o Windows pode mandar
+        let max = input.u32MaxFrameCount.max(4096) as usize * ch;
+        unsafe { *self.fmt.get() = (kind, vec![0.0; max]) };
         let engine = Engine::new(sr, ch, setup.endpoint.clone(), false);
         unsafe { *self.rt.get() = Some(engine) };
         self.locked.store(true, Ordering::SeqCst);
@@ -163,12 +254,18 @@ impl Core {
         }
         let Some(engine) = (unsafe { &mut *self.rt.get() }) else { return };
         let len = input.u32ValidFrameCount as usize * engine.channels();
-        let buf = unsafe { std::slice::from_raw_parts_mut(input.pBuffer as *mut f32, len) };
-        engine.process(buf);
-        if output.pBuffer != input.pBuffer && output.pBuffer != 0 {
-            let out = unsafe { std::slice::from_raw_parts_mut(output.pBuffer as *mut f32, len) };
-            out.copy_from_slice(buf);
+        let (kind, scratch) = unsafe { &mut *self.fmt.get() };
+        if *kind == Sample::Passthrough {
+            return; // formato desconhecido: o Windows copia entrada → saída (in-place)
         }
+        if len > scratch.len() {
+            return; // bloco maior que o previsto: passa direto (nunca alocar aqui)
+        }
+        let buf = &mut scratch[..len];
+        to_float(input.pBuffer as *const u8, *kind, buf);
+        engine.process(buf);
+        let dst = if output.pBuffer != 0 { output.pBuffer } else { input.pBuffer };
+        from_float(buf, *kind, dst as *mut u8);
     }
 }
 
@@ -462,5 +559,24 @@ extern "system" fn DllUnregisterServer() -> HRESULT {
     match unregister_server() {
         Ok(()) => S_OK,
         Err(_) => E_FAIL,
+    }
+}
+
+#[cfg(test)]
+mod pcm_tests {
+    use super::*;
+
+    #[test]
+    fn int_roundtrips() {
+        let x = [0.0f32, 0.5, -0.5, 0.999, -1.0];
+        for kind in [Sample::Int { bytes: 2, bits: 16 }, Sample::Int { bytes: 3, bits: 24 }, Sample::Int { bytes: 4, bits: 32 }, Sample::F32] {
+            let mut raw = vec![0u8; 4 * x.len()];
+            from_float(&x, kind, raw.as_mut_ptr());
+            let mut back = [0.0f32; 5];
+            to_float(raw.as_ptr(), kind, &mut back);
+            for (a, b) in x.iter().zip(back) {
+                assert!((a - b).abs() < 1e-4, "{kind:?}: {a} -> {b}");
+            }
+        }
     }
 }

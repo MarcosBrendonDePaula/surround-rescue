@@ -361,9 +361,11 @@ fn test_plugin(path: &str) {
     );
 }
 
-/// Diagnóstico: captura o som de um programa por alguns segundos e mede o que chegou ao fluxo.
-fn test_capture(exe: &str, secs: u64) {
-    let (cons, cap) = capture::Capture::start(capture::Source::App(exe.into()), 48000, |m| println!("{m}"));
+/// Diagnóstico: captura o som de um programa (ou, com `{guid}`, de um dispositivo de entrada)
+/// por alguns segundos e mede o que chegou.
+fn test_capture(what: &str, secs: u64) {
+    let src = if what.starts_with('{') { capture::Source::Device(what.into()) } else { capture::Source::App(what.into()) };
+    let (cons, cap) = capture::Capture::start(src, 48000, |m| println!("{m}"));
     let t0 = Instant::now();
     let (mut n, mut sum, mut peak, mut zc, mut last) = (0u64, 0.0f64, 0.0f32, 0u64, 0.0f32);
     while t0.elapsed() < Duration::from_secs(secs) {

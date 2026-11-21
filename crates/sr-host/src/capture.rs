@@ -104,7 +104,7 @@ impl IActivateAudioInterfaceCompletionHandler_Impl for Done_Impl {
 }
 
 /// Ativa a captura por processo e devolve o cliente com o formato que vamos pedir.
-unsafe fn activate_process(pid: u32) -> Result<(IAudioClient, WAVEFORMATEX, bool)> {
+unsafe fn activate_process(pid: u32) -> Result<(IAudioClient, Vec<u8>, bool)> {
     let mut params = AUDIOCLIENT_ACTIVATION_PARAMS {
         ActivationType: AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK,
         Anonymous: AUDIOCLIENT_ACTIVATION_PARAMS_0 {
@@ -133,21 +133,29 @@ unsafe fn activate_process(pid: u32) -> Result<(IAudioClient, WAVEFORMATEX, bool
     let client: IAudioClient = unk.ok_or(Error::from(E_FAIL))?.cast()?;
     // a captura por processo não informa formato: pedimos float 32 estéreo 48 kHz
     let f = WAVEFORMATEX { wFormatTag: 3, nChannels: 2, nSamplesPerSec: 48000, nAvgBytesPerSec: 48000 * 8, nBlockAlign: 8, wBitsPerSample: 32, cbSize: 0 };
-    Ok((client, f, true))
+    Ok((client, fmt_bytes(&f), true))
 }
 
-unsafe fn activate_device(id: &str) -> Result<(IAudioClient, WAVEFORMATEX, bool)> {
+/// Bytes de um formato (cabeçalho + extensão `cbSize`), para não perder a parte "extensível".
+unsafe fn fmt_bytes(f: *const WAVEFORMATEX) -> Vec<u8> {
+    let len = std::mem::size_of::<WAVEFORMATEX>() + (*f).cbSize as usize;
+    std::slice::from_raw_parts(f as *const u8, len).to_vec()
+}
+
+unsafe fn activate_device(id: &str) -> Result<(IAudioClient, Vec<u8>, bool)> {
     let en: IMMDeviceEnumerator = CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)?;
     let dev = en.GetDevice(&HSTRING::from(format!("{{0.0.1.00000000}}.{}", id.to_lowercase())))?;
     let client: IAudioClient = dev.Activate(CLSCTX_ALL, None)?;
+    // usa o formato do próprio Windows, inteiro (antes só o cabeçalho era copiado e o
+    // Windows lia lixo na extensão → "Parâmetro incorreto")
     let mix = client.GetMixFormat()?;
-    let f = *mix;
+    let f = fmt_bytes(mix);
     CoTaskMemFree(Some(mix as *const _));
     Ok((client, f, false))
 }
 
 unsafe fn run(
-    act: Result<(IAudioClient, WAVEFORMATEX, bool)>,
+    act: Result<(IAudioClient, Vec<u8>, bool)>,
     flow_rate: u32,
     prod: &mut Option<ring::Producer>,
     input: &mut Option<Input>,
@@ -155,10 +163,11 @@ unsafe fn run(
     log: fn(&str),
     what: &str,
 ) -> Result<()> {
-    let (client, fmt, loopback) = act?;
+    let (client, fmt_raw, loopback) = act?;
+    let fmt = *(fmt_raw.as_ptr() as *const WAVEFORMATEX);
     let flags = AUDCLNT_STREAMFLAGS_EVENTCALLBACK | if loopback { AUDCLNT_STREAMFLAGS_LOOPBACK | AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM } else { 0 };
     // 20 ms de buffer
-    client.Initialize(AUDCLNT_SHAREMODE_SHARED, flags, 200_000, 0, &fmt, None)?;
+    client.Initialize(AUDCLNT_SHAREMODE_SHARED, flags, 200_000, 0, fmt_raw.as_ptr() as *const WAVEFORMATEX, None)?;
     let ev = CreateEventW(None, false, false, None)?;
     client.SetEventHandle(ev)?;
     let cap: IAudioCaptureClient = client.GetService()?;

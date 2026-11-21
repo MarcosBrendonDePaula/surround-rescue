@@ -84,7 +84,10 @@ fn full_lifecycle_passthrough_without_config() {
         let pcm: IAudioMediaType = FakeType { sub: PCM, bytes: 2, ch: 2, sr: 48000.0 }.into();
         assert!(apo.IsInputFormatSupported(None, Some(&float)).is_ok());
         assert!(apo.IsOutputFormatSupported(None, Some(&float)).is_ok());
-        assert!(apo.IsInputFormatSupported(None, Some(&pcm)).is_err(), "só float 32");
+        // microfones entregam PCM inteiro: precisa ser aceito (senão o Windows não abre o mic)
+        assert!(apo.IsInputFormatSupported(None, Some(&pcm)).is_ok(), "PCM 16 bits do microfone");
+        let pcm8: IAudioMediaType = FakeType { sub: PCM, bytes: 1, ch: 2, sr: 48000.0 }.into();
+        assert!(apo.IsInputFormatSupported(None, Some(&pcm8)).is_ok(), "formato desconhecido passa direto em vez de quebrar o dispositivo");
 
         let cfg: IAudioProcessingObjectConfiguration = apo.cast().unwrap();
         let rt: IAudioProcessingObjectRT = apo.cast().unwrap();
