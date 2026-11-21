@@ -67,7 +67,8 @@ fn dll_source() -> Option<PathBuf> {
 }
 
 fn run(cmd: &str, args: &[&str]) -> bool {
-    std::process::Command::new(cmd).args(args).status().map(|s| s.success()).unwrap_or(false)
+    use std::os::windows::process::CommandExt;
+    std::process::Command::new(cmd).args(args).creation_flags(0x0800_0000).status().map(|s| s.success()).unwrap_or(false)
 }
 
 fn set_one(flow: &str, id: &str) -> Result<(), String> {

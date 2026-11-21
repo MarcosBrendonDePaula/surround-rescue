@@ -156,7 +156,9 @@ pub fn uninstall(flow: &str, id: &str) -> Result<(), String> {
 
 /// Reinicia o serviço de áudio do Windows para carregar a mudança (sem reiniciar o PC).
 pub fn restart_audio() -> Result<(), String> {
+    use std::os::windows::process::CommandExt;
     let ok = std::process::Command::new("powershell")
+        .creation_flags(0x0800_0000)
         .args(["-NoProfile", "-Command", "Restart-Service Audiosrv -Force"])
         .status()
         .map(|s| s.success())

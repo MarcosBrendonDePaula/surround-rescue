@@ -549,7 +549,7 @@ fn scan(extra: &[String]) {
     .map(PathBuf::from)
     .collect();
     for key in [r"SOFTWARE\VST", r"SOFTWARE\WOW6432Node\VST"] {
-        if let Ok(v) = std::process::Command::new("reg").args(["query", &format!(r"HKLM\{key}"), "/v", "VSTPluginsPath"]).output() {
+        if let Ok(v) = { use std::os::windows::process::CommandExt; std::process::Command::new("reg").args(["query", &format!(r"HKLM\{key}"), "/v", "VSTPluginsPath"]).creation_flags(0x0800_0000).output() } {
             let t = String::from_utf8_lossy(&v.stdout);
             if let Some(path) = t.lines().find_map(|l| l.split("REG_SZ").nth(1)).map(|x| x.trim().to_string()) {
                 dirs2.push(PathBuf::from(path));
