@@ -439,7 +439,7 @@ function plBind() {
     const p = $("#pl-path").value.trim().replace(/^"|"$/g, "");
     if (!p) return;
     // pasta: procura plugins dentro dela (e lembra para as próximas buscas)
-    if (!/\.(vst3|dll)$/i.test(p)) {
+    if (!/\.(vst3|dll|clap)$/i.test(p)) {
       plAddDir(p);
       $("#pl-path").value = "";
       plScan().then(() => {

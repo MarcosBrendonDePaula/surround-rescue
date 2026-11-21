@@ -155,7 +155,7 @@ function nodeInfo(n) {
     case "fx": { const f = FX[n.fx] || { name: n.fx, glyph: "?" }; return [f.name, f.unit !== undefined ? `${n.value} ${f.unit}`.trim() : f.hint || "bloco nativo", f.glyph]; }
     case "plugin": {
       const p = doc().plugins[n.plugin];
-      return [p ? baseName(p.path) : "(plugin removido)", p && !p.enabled ? "desligado" : /\.dll$/i.test(p?.path || "") ? "plugin VST2" : "plugin VST3", "✦"];
+      return [p ? baseName(p.path) : "(plugin removido)", p && !p.enabled ? "desligado" : /\.dll$/i.test(p?.path || "") ? "plugin VST2" : /\.clap$/i.test(p?.path || "") ? "plugin CLAP" : "plugin VST3", "✦"];
     }
   }
   return [n.kind, "", "?"];
