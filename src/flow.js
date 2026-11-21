@@ -716,6 +716,15 @@ function flFit() {
 }
 
 // ---------- eventos ----------
+/// Segundo clique no mesmo alvo em até 400 ms (e sem ter arrastado) = duplo clique.
+function flIsDouble(key) {
+  const now = performance.now();
+  const last = FL.lastClick;
+  FL.lastClick = { key, t: now };
+  if (last && last.key === key && now - last.t < 400 && !last.moved) { FL.lastClick = null; return true; }
+  return false;
+}
+
 function flBind() {
   document.body.appendChild($("#fl-panel"));
   $("#fl-panel").addEventListener("click", (ev) => { if (ev.target.id === "fl-panel") ev.stopPropagation(); });
@@ -761,12 +770,14 @@ function flBind() {
       const [px, py] = worldPoint(ev);
       FL.drag = { n, dx: px - n.x, dy: py - n.y, moved: false };
       FL.sel = { node: n.id };
+      if (flIsDouble(`n:${n.id}`)) { FL.open = true; FL.drag = null; flRender(); flPanel(); return; }
       svg.setPointerCapture(ev.pointerId);
       flRender();
       return;
     }
     if (t.dataset.edge !== undefined) {
       FL.sel = { edge: Number(t.dataset.edge) };
+      if (flIsDouble(`e:${t.dataset.edge}`)) { FL.open = true; flRender(); flPanel(); return; }
       flRender();
       return;
     }
@@ -778,9 +789,12 @@ function flBind() {
   svg.addEventListener("pointermove", (ev) => {
     if (FL.drag) {
       const [px, py] = worldPoint(ev);
-      FL.drag.n.x = Math.round((px - FL.drag.dx) / 10) * 10;
-      FL.drag.n.y = Math.round((py - FL.drag.dy) / 10) * 10;
+      const nx = Math.round((px - FL.drag.dx) / 10) * 10, ny = Math.round((py - FL.drag.dy) / 10) * 10;
+      if (nx === FL.drag.n.x && ny === FL.drag.n.y) return; // tremida do mouse: não é arrasto
+      FL.drag.n.x = nx;
+      FL.drag.n.y = ny;
       FL.drag.moved = true;
+      if (FL.lastClick) FL.lastClick.moved = true;
       flRender();
     } else if (FL.wire) {
       FL.wire.to = worldPoint(ev);
