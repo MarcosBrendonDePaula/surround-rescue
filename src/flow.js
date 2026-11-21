@@ -683,7 +683,7 @@ function flSaveSoon() {
       flError(String(e));
       $("#fl-saved").textContent = "Não salvou";
     }
-  }, 250);
+  }, 120);
 }
 
 /// Ponto do mouse em coordenadas do mundo (desfaz arrasto e zoom da tela).

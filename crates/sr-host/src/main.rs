@@ -68,6 +68,8 @@ struct Device {
     stop: Arc<AtomicBool>,
     timing: Arc<stats::Timing>,
     meters: Option<Arc<chain::Meters>>,
+    updates: Option<chain::UpdateSlot>,
+    pending_reload: bool,
 }
 
 impl Device {
@@ -87,6 +89,8 @@ impl Device {
             stop: Arc::new(AtomicBool::new(false)),
             timing: stats::Timing::new(),
             meters: None,
+            updates: None,
+            pending_reload: false,
         }
     }
 
@@ -124,20 +128,37 @@ impl Device {
         self.captures = io.captures;
         let ch = AudioChain::new(&self.loaded, &self.cfg, sr as f64, io.producers, io.consumers, &log);
         self.meters = Some(ch.meters.clone());
+        self.updates = Some(ch.updates());
         *self.slot.lock().unwrap() = Some(ch);
+    }
+
+    /// Ciclo rápido (100 ms): o arquivo mudou? Mudança leve (volume, pan, ligações, valores) vai
+    /// direto para a cadeia tocando; mudança de estrutura recarrega. Devolve true se precisa recarregar.
+    fn check_file(&mut self) -> bool {
+        let m = mtime(&self.file);
+        if m == self.seen {
+            return false;
+        }
+        self.seen = m;
+        let new = read_chain(&self.file);
+        if self.loaded_sr > 0 {
+            if let (Some(u), Some(slot)) = (chain::soft_update(&self.cfg, &new, self.loaded_sr as f64), &self.updates) {
+                *slot.lock().unwrap() = Some(u);
+                self.cfg = new;
+                return false;
+            }
+        }
+        chain::save_states(&self.endpoint, &self.loaded, &log);
+        self.cfg = new;
+        log(&format!("{}: cadeia alterada ({} plugins)", self.endpoint, self.cfg.plugins.len()));
+        true
     }
 
     /// Ciclo lento (1 s): canal, mudanças no arquivo e na taxa.
     fn tick(&mut self) {
         self.connect();
-        let m = mtime(&self.file);
-        let changed = m != self.seen;
-        if changed {
-            self.seen = m;
-            chain::save_states(&self.endpoint, &self.loaded, &log);
-            self.cfg = read_chain(&self.file);
-            log(&format!("{}: cadeia alterada ({} plugins)", self.endpoint, self.cfg.plugins.len()));
-        }
+        let changed = self.check_file() || self.pending_reload;
+        self.pending_reload = false;
         let sr = self.channel.as_ref().map(|c| c.header().sample_rate.load(Ordering::Relaxed)).unwrap_or(0);
         if sr > 0 && (changed || sr != self.loaded_sr) {
             self.reload(sr);
@@ -332,6 +353,7 @@ fn run() {
     let mut devices: HashMap<String, Device> = HashMap::new();
     let mut free_flows: HashMap<String, flows::Flow> = HashMap::new();
     let mut last_tick = Instant::now() - Duration::from_secs(10);
+    let mut last_fast = Instant::now();
     let mut last_save = Instant::now();
     let mut last_stats = Instant::now();
     let mut last_levels = Instant::now();
@@ -350,6 +372,18 @@ fn run() {
                     Some(f) => f.open_window(n),
                     None => log(&format!("pedido de janela para fluxo inexistente: {ep}")),
                 },
+            }
+        }
+        // mudanças nos fluxos chegam em até 100 ms
+        if last_fast.elapsed() >= Duration::from_millis(100) {
+            last_fast = Instant::now();
+            for d in devices.values_mut() {
+                if d.check_file() {
+                    d.pending_reload = true;
+                }
+            }
+            for f in free_flows.values_mut() {
+                f.check_file();
             }
         }
         if last_tick.elapsed() >= Duration::from_secs(1) {

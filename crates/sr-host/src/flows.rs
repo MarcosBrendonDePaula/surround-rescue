@@ -69,6 +69,7 @@ pub struct Flow {
     clock: Option<std::thread::JoinHandle<()>>,
     timing: Arc<crate::stats::Timing>,
     meters: Option<Arc<crate::chain::Meters>>,
+    updates: Option<crate::chain::UpdateSlot>,
 }
 
 impl Flow {
@@ -93,6 +94,7 @@ impl Flow {
             clock: None,
             timing: crate::stats::Timing::new(),
             meters: None,
+            updates: None,
         }
     }
 
@@ -114,6 +116,7 @@ impl Flow {
         self.captures = io.captures;
         let ch = AudioChain::new(&self.loaded, &self.cfg.chain, RATE as f64, io.producers, io.consumers, &log);
         self.meters = Some(ch.meters.clone());
+        self.updates = Some(ch.updates());
         *self.slot.lock().unwrap() = Some(Some(ch));
         if self.clock.is_none() {
             let (slot, stop, timing) = (self.slot.clone(), self.stop.clone(), self.timing.clone());
@@ -139,19 +142,34 @@ impl Flow {
         self.running = false;
     }
 
-    /// Ciclo lento (1 s): arquivo mudou? condição mudou?
-    pub fn tick(&mut self) {
+    /// Ciclo rápido (100 ms): mudança leve vai direto para a cadeia tocando; o resto para e o
+    /// ciclo lento sobe de novo.
+    pub fn check_file(&mut self) {
         let m = mtime(&self.file);
-        if m != self.seen {
-            self.seen = m;
-            if self.running {
-                chain::save_states(&self.id, &self.loaded, &log);
-            }
-            self.cfg = read(&self.file);
-            if self.running {
-                self.halt();
+        if m == self.seen {
+            return;
+        }
+        self.seen = m;
+        let new = read(&self.file);
+        if self.running && new.enabled == self.cfg.enabled && new.when.exe == self.cfg.when.exe {
+            if let (Some(u), Some(slot)) = (crate::chain::soft_update(&self.cfg.chain, &new.chain, RATE as f64), &self.updates) {
+                *slot.lock().unwrap() = Some(u);
+                self.cfg = new;
+                return;
             }
         }
+        if self.running {
+            chain::save_states(&self.id, &self.loaded, &log);
+        }
+        self.cfg = new;
+        if self.running {
+            self.halt();
+        }
+    }
+
+    /// Ciclo lento (1 s): arquivo mudou? condição mudou?
+    pub fn tick(&mut self) {
+        self.check_file();
         match (self.wanted(), self.running) {
             (true, false) => self.start(),
             (false, true) => self.halt(),
