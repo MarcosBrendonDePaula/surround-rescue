@@ -3691,6 +3691,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "sr-apo"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "sr-dsp",
+ "windows 0.62.2",
+ "windows-core",
+ "winreg 0.55.0",
+]
+
+[[package]]
 name = "sr-dsp"
 version = "0.1.0"
 dependencies = [
