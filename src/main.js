@@ -387,7 +387,7 @@ function plRender() {
       <div class="pactions">
         <button data-pl-up="${i}" title="Subir"${i === 0 ? " disabled" : ""}>↑</button>
         <button data-pl-down="${i}" title="Descer"${i === list.length - 1 ? " disabled" : ""}>↓</button>
-        <button data-pl-win="${i}" title="Abrir a janela do plugin (em breve)" disabled>▣</button>
+        <button data-pl-win="${i}" title="Abrir a janela do plugin"${p.enabled ? "" : " disabled"}>▣</button>
         <button data-pl-del="${i}" title="Remover">×</button>
       </div>
     </li>`).join("");
@@ -428,6 +428,11 @@ function plBind() {
     const t = e.target.closest("button");
     if (!t) return;
     const L = PL.chain.plugins;
+    if (t.dataset.plWin !== undefined) {
+      invoke("open_plugin_window", { endpoint: PL.device, index: Number(t.dataset.plWin) })
+        .catch((err) => { $("#error").textContent = String(err); $("#error").hidden = false; });
+      return;
+    }
     const i = Number(t.dataset.plUp ?? t.dataset.plDown ?? t.dataset.plDel);
     if (t.dataset.plUp !== undefined && i > 0) [L[i - 1], L[i]] = [L[i], L[i - 1]];
     else if (t.dataset.plDown !== undefined && i < L.length - 1) [L[i + 1], L[i]] = [L[i], L[i + 1]];

@@ -2,11 +2,15 @@
 //! para usar na DAW (Reaper etc.) em ASIO, com latência zero somada pelo plugin.
 
 use nih_plug::prelude::*;
+use nih_plug_egui::{create_egui_editor, egui, widgets, EguiState};
 use sr_dsp::{Processor, Settings};
 use std::sync::Arc;
 
 #[derive(Params)]
 struct SrParams {
+    /// Tamanho da janela, salvo junto com os ajustes
+    #[persist = "editor-state"]
+    editor_state: Arc<EguiState>,
     #[id = "on"]
     enabled: BoolParam,
     #[id = "angle"]
@@ -49,6 +53,7 @@ impl Default for SrParams {
     fn default() -> Self {
         let d = Settings::default();
         Self {
+            editor_state: EguiState::from_size(460, 560),
             enabled: BoolParam::new("Surround ligado", true),
             front_angle: FloatParam::new("Abertura das caixas", d.front_angle as f32, FloatRange::Linear { min: 10.0, max: 90.0 })
                 .with_step_size(1.0)
@@ -148,6 +153,69 @@ impl Plugin for SurroundRescue {
 
     fn params(&self) -> Arc<dyn Params> {
         self.params.clone()
+    }
+
+    fn editor(&mut self, _: AsyncExecutor<Self>) -> Option<Box<dyn Editor>> {
+        let params = self.params.clone();
+        create_egui_editor(
+            self.params.editor_state.clone(),
+            (),
+            |ctx, _| {
+                let mut v = egui::Visuals::dark();
+                let amber = egui::Color32::from_rgb(0xff, 0xb5, 0x47);
+                v.panel_fill = egui::Color32::from_rgb(0x14, 0x1a, 0x33);
+                v.selection.bg_fill = amber;
+                v.widgets.active.bg_fill = amber;
+                v.widgets.hovered.bg_stroke = egui::Stroke::new(1.0, amber);
+                ctx.set_visuals(v);
+            },
+            move |ctx, setter, _| {
+                let toggle = |ui: &mut egui::Ui, p: &BoolParam, label: &str| {
+                    let mut on = p.value();
+                    if ui.checkbox(&mut on, label).changed() {
+                        setter.begin_set_parameter(p);
+                        setter.set_parameter(p, on);
+                        setter.end_set_parameter(p);
+                    }
+                };
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    ui.heading("Surround Rescue");
+                    toggle(ui, &params.enabled, "Surround ligado");
+                    ui.separator();
+                    ui.strong("Campo de som");
+                    ui.label("Abertura das caixas");
+                    ui.add(widgets::ParamSlider::for_param(&params.front_angle, setter));
+                    ui.label("Intensidade do surround");
+                    ui.add(widgets::ParamSlider::for_param(&params.spatial, setter));
+                    ui.separator();
+                    ui.strong("Áudio");
+                    toggle(ui, &params.stereo_enhanced, "Estéreo melhorado");
+                    ui.label("Reforço de graves");
+                    ui.add(widgets::ParamSlider::for_param(&params.bass, setter));
+                    ui.label("Normalização");
+                    ui.add(widgets::ParamSlider::for_param(&params.normalization, setter));
+                    ui.label("Clareza de voz: presença");
+                    ui.add(widgets::ParamSlider::for_param(&params.presence, setter));
+                    ui.label("Clareza de voz: volume das vozes");
+                    ui.add(widgets::ParamSlider::for_param(&params.voice, setter));
+                    ui.label("Volume");
+                    ui.add(widgets::ParamSlider::for_param(&params.volume, setter));
+                    ui.separator();
+                    ui.strong("Equalizador");
+                    let bands = [
+                        (&params.eq0, "31"), (&params.eq1, "63"), (&params.eq2, "125"), (&params.eq3, "250"), (&params.eq4, "500"),
+                        (&params.eq5, "1k"), (&params.eq6, "2k"), (&params.eq7, "4k"), (&params.eq8, "8k"), (&params.eq9, "16k"),
+                    ];
+                    egui::Grid::new("eq").num_columns(2).show(ui, |ui| {
+                        for (p, f) in bands {
+                            ui.label(format!("{f} Hz"));
+                            ui.add(widgets::ParamSlider::for_param(p, setter));
+                            ui.end_row();
+                        }
+                    });
+                });
+            },
+        )
     }
 
     fn initialize(&mut self, _: &AudioIOLayout, cfg: &BufferConfig, _: &mut impl InitContext<Self>) -> bool {

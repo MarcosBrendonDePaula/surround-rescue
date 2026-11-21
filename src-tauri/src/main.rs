@@ -170,6 +170,11 @@ fn set_chain(endpoint: String, chain: plugins::Chain, host: State<plugins::HostP
 }
 
 #[tauri::command]
+fn open_plugin_window(endpoint: String, index: usize, host: State<plugins::HostProcess>) -> Result<(), String> {
+    plugins::open_window(&endpoint, index, &host)
+}
+
+#[tauri::command]
 fn host_status(host: State<plugins::HostProcess>) -> serde_json::Value {
     serde_json::json!({ "running": host.running(), "found": plugins::host_exe().is_some() })
 }
@@ -214,7 +219,7 @@ fn main() {
         .plugin(tauri_plugin_single_instance::init(|app, _, _| show(app)))
         .manage(state)
         .manage(plugins::HostProcess(Mutex::new(None)))
-        .invoke_handler(tauri::generate_handler![get_snapshot, set_config, get_status, set_device_engine, set_autostart, preview, recent_apps, scan_plugins, get_chain, set_chain, host_status])
+        .invoke_handler(tauri::generate_handler![get_snapshot, set_config, get_status, set_device_engine, set_autostart, preview, recent_apps, scan_plugins, get_chain, set_chain, host_status, open_plugin_window])
         .setup(|app| {
             let show_i = MenuItem::with_id(app, "show", "Abrir", true, None::<&str>)?;
             let toggle_i = MenuItem::with_id(app, "toggle", "Ligar/Desligar surround", true, None::<&str>)?;

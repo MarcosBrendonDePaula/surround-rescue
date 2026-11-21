@@ -87,6 +87,8 @@ pub struct Channel {
 }
 
 unsafe impl Send for Channel {}
+// Header só tem atômicos; serve() é chamado por uma thread só (a de áudio).
+unsafe impl Sync for Channel {}
 
 impl Channel {
     /// APO (serviço de áudio): cria o canal do dispositivo, fora do tempo real.

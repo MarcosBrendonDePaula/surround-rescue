@@ -64,6 +64,19 @@ pub fn set_chain(endpoint: &str, chain: &Chain) -> Result<(), String> {
     std::fs::rename(&tmp, &f).map_err(|e| e.to_string())
 }
 
+/// Pede ao executor para abrir a janela do plugin `index` (posição na lista) do dispositivo.
+pub fn open_window(endpoint: &str, index: usize, host: &HostProcess) -> Result<(), String> {
+    if !valid_endpoint(endpoint) {
+        return Err("Dispositivo inválido.".into());
+    }
+    if !host.running() {
+        host.ensure();
+    }
+    let dir = chains_dir().parent().unwrap().join("cmd");
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    std::fs::write(dir.join(format!("open-{}-{index}", endpoint.to_lowercase())), b"").map_err(|e| e.to_string())
+}
+
 /// Procura o sr-host.exe ao lado do app (instalado) ou na pasta de build (desenvolvimento).
 pub fn host_exe() -> Option<PathBuf> {
     let me = std::env::current_exe().ok()?;
