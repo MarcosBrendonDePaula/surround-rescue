@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Surround Rescue</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <h1>Surround Rescue</h1>
+  <label class="switch" title="Ligar/desligar">
+    <input type="checkbox" id="enabled"><span></span>
+  </label>
+</header>
+
+<section id="status" class="status"></section>
+
+<section>
+  <h2>Perfil</h2>
+  <div class="presets" id="presets">
+    <button data-p="natural">Natural</button>
+    <button data-p="jogo">Jogo</button>
+    <button data-p="filme">Filme</button>
+    <button data-p="musica">Música</button>
+  </div>
+</section>
+
+<section class="sliders">
+  <h2>Ajustes</h2>
+  <div class="row"><label for="spatial">Espacialização</label><input type="range" id="spatial" min="0" max="100" step="1"><output></output></div>
+  <div class="row"><label for="width">Largura</label><input type="range" id="width" min="0" max="200" step="5"><output></output></div>
+  <div class="row"><label for="bass_db">Graves</label><input type="range" id="bass_db" min="-6" max="12" step="0.5"><output></output></div>
+  <div class="row"><label for="clarity_db">Clareza de voz</label><input type="range" id="clarity_db" min="-6" max="9" step="0.5"><output></output></div>
+  <div class="row"><label for="treble_db">Agudos</label><input type="range" id="treble_db" min="-6" max="9" step="0.5"><output></output></div>
+  <div class="row"><label for="volume_db">Volume</label><input type="range" id="volume_db" min="-30" max="6" step="0.5"><output></output></div>
+  <p class="hint">O volume nunca passa do limite seguro: o app desconta automaticamente o reforço de graves e efeitos.</p>
+</section>
+
+<details>
+  <summary>Configuração gerada</summary>
+  <pre id="preview"></pre>
+</details>
+
+<p id="error" class="error" hidden></p>
+<script src="main.js"></script>
+</body>
+</html>
