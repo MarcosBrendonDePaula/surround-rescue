@@ -5,6 +5,17 @@
 //! em qualquer dúvida o áudio passa sem alteração.
 
 pub mod config;
+
+/// Diagnóstico (fora do tempo real): acrescenta uma linha em ProgramData\SurroundRescue\enginepo-log.txt
+pub fn log(msg: &str) {
+    use std::io::Write;
+    let dir = config::engine_dir();
+    let _ = std::fs::create_dir_all(&dir);
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(dir.join("apo-log.txt")) {
+        let t = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+        let _ = writeln!(f, "{t} pid={} {msg}", std::process::id());
+    }
+}
 mod engine;
 mod register;
 
@@ -124,10 +135,13 @@ impl IAudioProcessingObject_Impl for SrApo_Impl {
 
     fn Initialize(&self, cbdatasize: u32, pbydata: *const u8) -> Result<()> {
         let mut setup = self.setup.lock().unwrap();
+        log(&format!("Initialize tamanho={cbdatasize} (base={} sysfx={})", std::mem::size_of::<APOInitBaseStruct>(), std::mem::size_of::<APOInitSystemEffects>()));
         if cbdatasize as usize >= std::mem::size_of::<APOInitSystemEffects>() && !pbydata.is_null() {
             let init = unsafe { &*(pbydata as *const APOInitSystemEffects) };
             if let Some(store) = init.pAPOEndpointProperties.as_ref() {
-                if let Ok(v) = unsafe { store.GetValue(&PKEY_ENDPOINT_GUID) } {
+                let r = unsafe { store.GetValue(&PKEY_ENDPOINT_GUID) };
+                log(&format!("  GUID do dispositivo: {:?}", r.as_ref().map(|v| v.to_string())));
+                if let Ok(v) = r {
                     let s = v.to_string();
                     if s.starts_with('{') {
                         setup.endpoint = Some(s);
@@ -165,6 +179,7 @@ impl IAudioProcessingObjectConfiguration_Impl for SrApo_Impl {
         let fmt = input.pFormat.as_ref().ok_or(Error::from(E_POINTER))?;
         let (sr, ch) = format_info(fmt).ok_or(Error::from(APOERR_FORMAT_NOT_SUPPORTED))?;
         let setup = self.setup.lock().unwrap();
+        log(&format!("LockForProcess taxa={sr} canais={ch} dispositivo={:?}", setup.endpoint));
         let engine = Engine::new(sr, ch, setup.endpoint.clone(), setup.capture);
         unsafe { *self.rt.get() = Some(engine) };
         self.locked.store(true, Ordering::SeqCst);
@@ -245,6 +260,7 @@ extern "system" fn DllGetClassObject(clsid: *const GUID, iid: *const GUID, out: 
             return E_POINTER;
         }
         *out = std::ptr::null_mut();
+        log("DllGetClassObject");
         if *clsid != CLSID_SR_APO {
             return CLASS_E_CLASSNOTAVAILABLE;
         }
