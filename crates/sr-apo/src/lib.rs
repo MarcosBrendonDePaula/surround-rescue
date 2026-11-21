@@ -3,19 +3,12 @@
 //! Um APO é um componente COM que o Windows carrega dentro do `audiodg.exe` e chama a cada
 //! bloco de áudio (10 ms). Regras de ouro no `APOProcess`: não bloquear, não alocar, nunca falhar —
 //! em qualquer dúvida o áudio passa sem alteração.
+//!
+//! O audiodg cria os APOs **agregados** (embutidos num objeto COM dele). Por isso o objeto é escrito
+//! "à mão" (tabelas de funções explícitas): cada interface repassa QueryInterface/AddRef/Release
+//! ao objeto de fora, e há um IUnknown interno "não delegante" — como manda a regra de agregação do COM.
 
 pub mod config;
-
-/// Diagnóstico (fora do tempo real): acrescenta uma linha em ProgramData\SurroundRescue\enginepo-log.txt
-pub fn log(msg: &str) {
-    use std::io::Write;
-    let dir = config::engine_dir();
-    let _ = std::fs::create_dir_all(&dir);
-    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(dir.join("apo-log.txt")) {
-        let t = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
-        let _ = writeln!(f, "{t} pid={} {msg}", std::process::id());
-    }
-}
 mod engine;
 mod register;
 
@@ -29,8 +22,18 @@ use std::sync::Mutex;
 use windows::Win32::Foundation::*;
 use windows::Win32::Media::Audio::Apo::*;
 use windows::Win32::System::Com::*;
-use windows::Win32::Foundation::PROPERTYKEY;
 use windows_core::*;
+
+/// Diagnóstico (fora do tempo real): acrescenta uma linha em ProgramData\SurroundRescue\engine\apo-log.txt
+pub fn log(msg: &str) {
+    use std::io::Write;
+    let dir = config::engine_dir();
+    let _ = std::fs::create_dir_all(&dir);
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(dir.join("apo-log.txt")) {
+        let t = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+        let _ = writeln!(f, "{t} pid={} {msg}", std::process::id());
+    }
+}
 
 /// IEEE float (KSDATAFORMAT_SUBTYPE_IEEE_FLOAT)
 const FLOAT_SUBTYPE: GUID = GUID::from_u128(0x00000003_0000_0010_8000_00aa00389b71);
@@ -39,37 +42,6 @@ const PKEY_ENDPOINT_GUID: PROPERTYKEY = PROPERTYKEY { fmtid: GUID::from_u128(0x1
 
 static LOCKS: AtomicU32 = AtomicU32::new(0);
 static OBJECTS: AtomicU32 = AtomicU32::new(0);
-
-#[implement(IAudioProcessingObject, IAudioProcessingObjectRT, IAudioProcessingObjectConfiguration, IAudioSystemEffects)]
-pub struct SrApo {
-    /// Preenchido em Initialize/LockForProcess (fora do tempo real)
-    setup: Mutex<Setup>,
-    locked: AtomicBool,
-    /// Acesso exclusivo do APOProcess enquanto travado para processamento.
-    rt: UnsafeCell<Option<Engine>>,
-}
-
-// O Windows garante que APOProcess não roda em paralelo com Lock/Unlock.
-unsafe impl Sync for SrApo {}
-
-#[derive(Default)]
-struct Setup {
-    endpoint: Option<String>,
-    capture: bool,
-}
-
-impl Default for SrApo {
-    fn default() -> Self {
-        OBJECTS.fetch_add(1, Ordering::SeqCst);
-        SrApo { setup: Mutex::new(Setup::default()), locked: AtomicBool::new(false), rt: UnsafeCell::new(None) }
-    }
-}
-
-impl Drop for SrApo {
-    fn drop(&mut self) {
-        OBJECTS.fetch_sub(1, Ordering::SeqCst);
-    }
-}
 
 fn wide<const N: usize>(s: &str) -> [u16; N] {
     let mut out = [0u16; N];
@@ -112,33 +84,32 @@ fn format_info(t: &IAudioMediaType) -> Option<(f64, usize)> {
     Some((f.fFramesPerSecond as f64, f.dwSamplesPerFrame as usize))
 }
 
-impl IAudioProcessingObject_Impl for SrApo_Impl {
-    fn Reset(&self) -> Result<()> {
-        Ok(())
+// =====================================================================
+// Lógica do APO (independente de COM)
+// =====================================================================
+
+#[derive(Default)]
+struct Setup {
+    endpoint: Option<String>,
+}
+
+struct Core {
+    setup: Mutex<Setup>,
+    locked: AtomicBool,
+    /// Acesso exclusivo do APOProcess enquanto travado (o Windows não chama em paralelo com Lock/Unlock).
+    rt: UnsafeCell<Option<Engine>>,
+}
+
+impl Core {
+    fn new() -> Core {
+        Core { setup: Mutex::new(Setup::default()), locked: AtomicBool::new(false), rt: UnsafeCell::new(None) }
     }
 
-    /// Latência somada pelo APO: zero (só filtros IIR, sem lookahead).
-    fn GetLatency(&self) -> Result<i64> {
-        Ok(0)
-    }
-
-    fn GetRegistrationProperties(&self) -> Result<*mut APO_REG_PROPERTIES> {
-        log("GetRegistrationProperties");
-        unsafe {
-            let p = CoTaskMemAlloc(std::mem::size_of::<APO_REG_PROPERTIES>()) as *mut APO_REG_PROPERTIES;
-            if p.is_null() {
-                return Err(E_OUTOFMEMORY.into());
-            }
-            p.write(reg_properties());
-            Ok(p)
-        }
-    }
-
-    fn Initialize(&self, cbdatasize: u32, pbydata: *const u8) -> Result<()> {
+    fn initialize(&self, size: u32, data: *const u8) -> HRESULT {
         let mut setup = self.setup.lock().unwrap();
-        log(&format!("Initialize tamanho={cbdatasize} (base={} sysfx={})", std::mem::size_of::<APOInitBaseStruct>(), std::mem::size_of::<APOInitSystemEffects>()));
-        if cbdatasize as usize >= std::mem::size_of::<APOInitSystemEffects>() && !pbydata.is_null() {
-            let init = unsafe { &*(pbydata as *const APOInitSystemEffects) };
+        log(&format!("Initialize tamanho={size}"));
+        if size as usize >= std::mem::size_of::<APOInitSystemEffects>() && !data.is_null() {
+            let init = unsafe { &*(data as *const APOInitSystemEffects) };
             if let Some(store) = init.pAPOEndpointProperties.as_ref() {
                 let r = unsafe { store.GetValue(&PKEY_ENDPOINT_GUID) };
                 log(&format!("  GUID do dispositivo: {:?}", r.as_ref().map(|v| v.to_string())));
@@ -150,56 +121,36 @@ impl IAudioProcessingObject_Impl for SrApo_Impl {
                 }
             }
         }
-        Ok(())
+        S_OK
     }
 
-    fn IsInputFormatSupported(&self, _opposite: Ref<IAudioMediaType>, requested: Ref<IAudioMediaType>) -> Result<IAudioMediaType> {
-        let req = requested.ok()?;
-        log(&format!("IsInputFormatSupported {:?} ok={}", format_info(req), format_ok(req)));
-        if format_ok(req) { Ok(req.clone()) } else { Err(APOERR_FORMAT_NOT_SUPPORTED.into()) }
-    }
-
-    fn IsOutputFormatSupported(&self, _opposite: Ref<IAudioMediaType>, requested: Ref<IAudioMediaType>) -> Result<IAudioMediaType> {
-        let req = requested.ok()?;
-        log(&format!("IsOutputFormatSupported {:?} ok={}", format_info(req), format_ok(req)));
-        if format_ok(req) { Ok(req.clone()) } else { Err(APOERR_FORMAT_NOT_SUPPORTED.into()) }
-    }
-
-    fn GetInputChannelCount(&self) -> Result<u32> {
-        Ok(0)
-    }
-}
-
-impl IAudioProcessingObjectConfiguration_Impl for SrApo_Impl {
-    fn LockForProcess(&self, nin: u32, ins: *const *const APO_CONNECTION_DESCRIPTOR, nout: u32, outs: *const *const APO_CONNECTION_DESCRIPTOR) -> Result<()> {
+    fn lock(&self, nin: u32, ins: *const *const APO_CONNECTION_DESCRIPTOR, nout: u32, outs: *const *const APO_CONNECTION_DESCRIPTOR) -> HRESULT {
         if self.locked.load(Ordering::SeqCst) {
-            return Err(APOERR_APO_LOCKED.into());
+            return APOERR_APO_LOCKED;
         }
         if nin != 1 || nout != 1 || ins.is_null() || outs.is_null() {
-            return Err(APOERR_NUM_CONNECTIONS_INVALID.into());
+            return APOERR_NUM_CONNECTIONS_INVALID;
         }
         let input = unsafe { &**ins };
-        let fmt = input.pFormat.as_ref().ok_or(Error::from(E_POINTER))?;
-        let (sr, ch) = format_info(fmt).ok_or(Error::from(APOERR_FORMAT_NOT_SUPPORTED))?;
+        let Some(fmt) = input.pFormat.as_ref() else { return E_POINTER };
+        let Some((sr, ch)) = format_info(fmt) else { return APOERR_FORMAT_NOT_SUPPORTED };
         let setup = self.setup.lock().unwrap();
         log(&format!("LockForProcess taxa={sr} canais={ch} dispositivo={:?}", setup.endpoint));
-        let engine = Engine::new(sr, ch, setup.endpoint.clone(), setup.capture);
+        let engine = Engine::new(sr, ch, setup.endpoint.clone(), false);
         unsafe { *self.rt.get() = Some(engine) };
         self.locked.store(true, Ordering::SeqCst);
-        Ok(())
+        S_OK
     }
 
-    fn UnlockForProcess(&self) -> Result<()> {
+    fn unlock(&self) -> HRESULT {
         if !self.locked.swap(false, Ordering::SeqCst) {
-            return Err(APOERR_ALREADY_UNLOCKED.into());
+            return APOERR_ALREADY_UNLOCKED;
         }
         unsafe { *self.rt.get() = None };
-        Ok(())
+        S_OK
     }
-}
 
-impl IAudioProcessingObjectRT_Impl for SrApo_Impl {
-    fn APOProcess(&self, nin: u32, ins: *const *const APO_CONNECTION_PROPERTY, nout: u32, outs: *mut *mut APO_CONNECTION_PROPERTY) {
+    fn process(&self, nin: u32, ins: *const *const APO_CONNECTION_PROPERTY, nout: u32, outs: *mut *mut APO_CONNECTION_PROPERTY) {
         if nin != 1 || nout != 1 || ins.is_null() || outs.is_null() {
             return;
         }
@@ -208,7 +159,7 @@ impl IAudioProcessingObjectRT_Impl for SrApo_Impl {
         output.u32ValidFrameCount = input.u32ValidFrameCount;
         output.u32BufferFlags = input.u32BufferFlags;
         if input.u32BufferFlags != BUFFER_VALID || input.pBuffer == 0 {
-            return; // silêncio ou buffer inválido: nada a fazer
+            return;
         }
         let Some(engine) = (unsafe { &mut *self.rt.get() }) else { return };
         let len = input.u32ValidFrameCount as usize * engine.channels();
@@ -219,17 +170,229 @@ impl IAudioProcessingObjectRT_Impl for SrApo_Impl {
             out.copy_from_slice(buf);
         }
     }
+}
 
-    fn CalcInputFrames(&self, n: u32) -> u32 {
-        n
+// =====================================================================
+// Objeto COM escrito à mão, com suporte a agregação
+// =====================================================================
+
+/// Layout: uma tabela de funções por interface, depois o IUnknown interno.
+#[repr(C)]
+struct SrApo {
+    apo: *const IAudioProcessingObject_Vtbl,
+    rt: *const IAudioProcessingObjectRT_Vtbl,
+    cfg: *const IAudioProcessingObjectConfiguration_Vtbl,
+    sfx: *const IAudioSystemEffects_Vtbl,
+    inner: *const IUnknown_Vtbl,
+    /// IUnknown que controla a vida do objeto: o de fora (agregado) ou o nosso interno.
+    outer: *mut c_void,
+    refs: AtomicU32,
+    core: Core,
+}
+
+const OFF_APO: usize = 0;
+const OFF_RT: usize = std::mem::size_of::<usize>();
+const OFF_CFG: usize = 2 * std::mem::size_of::<usize>();
+const OFF_SFX: usize = 3 * std::mem::size_of::<usize>();
+const OFF_INNER: usize = 4 * std::mem::size_of::<usize>();
+
+#[inline]
+unsafe fn base<'a>(this: *mut c_void, off: usize) -> &'a SrApo {
+    &*((this as *mut u8).sub(off) as *const SrApo)
+}
+
+unsafe fn unk_vtbl(p: *mut c_void) -> &'static IUnknown_Vtbl {
+    &**(p as *const *const IUnknown_Vtbl)
+}
+
+// --- IUnknown delegante (em todas as interfaces do APO) ---
+macro_rules! delegating {
+    ($qi:ident, $ar:ident, $rl:ident, $off:expr) => {
+        unsafe extern "system" fn $qi(this: *mut c_void, iid: *const GUID, out: *mut *mut c_void) -> HRESULT {
+            let o = base(this, $off).outer;
+            (unk_vtbl(o).QueryInterface)(o, iid, out)
+        }
+        unsafe extern "system" fn $ar(this: *mut c_void) -> u32 {
+            let o = base(this, $off).outer;
+            (unk_vtbl(o).AddRef)(o)
+        }
+        unsafe extern "system" fn $rl(this: *mut c_void) -> u32 {
+            let o = base(this, $off).outer;
+            (unk_vtbl(o).Release)(o)
+        }
+    };
+}
+delegating!(apo_qi, apo_addref, apo_release, OFF_APO);
+delegating!(rt_qi, rt_addref, rt_release, OFF_RT);
+delegating!(cfg_qi, cfg_addref, cfg_release, OFF_CFG);
+delegating!(sfx_qi, sfx_addref, sfx_release, OFF_SFX);
+
+// --- IUnknown interno (não delegante): quem manda na vida do objeto ---
+unsafe extern "system" fn inner_qi(this: *mut c_void, iid: *const GUID, out: *mut *mut c_void) -> HRESULT {
+    if out.is_null() {
+        return E_POINTER;
     }
-
-    fn CalcOutputFrames(&self, n: u32) -> u32 {
-        n
+    let s = base(this, OFF_INNER);
+    let iid = *iid;
+    let p = s as *const SrApo as *mut u8;
+    let found: Option<*mut c_void> = if iid == IUnknown::IID {
+        Some(p.add(OFF_INNER) as _)
+    } else if iid == IAudioProcessingObject::IID {
+        Some(p.add(OFF_APO) as _)
+    } else if iid == IAudioProcessingObjectRT::IID {
+        Some(p.add(OFF_RT) as _)
+    } else if iid == IAudioProcessingObjectConfiguration::IID {
+        Some(p.add(OFF_CFG) as _)
+    } else if iid == IAudioSystemEffects::IID {
+        Some(p.add(OFF_SFX) as _)
+    } else {
+        None
+    };
+    log(&format!("  QueryInterface {:?} -> {}", iid, if found.is_some() { "sim" } else { "não" }));
+    match found {
+        Some(ptr) => {
+            *out = ptr;
+            // AddRef pela própria interface (delegante → objeto de fora; interno → nós)
+            (unk_vtbl(ptr).AddRef)(ptr);
+            S_OK
+        }
+        None => {
+            *out = std::ptr::null_mut();
+            E_NOINTERFACE
+        }
     }
 }
 
-impl IAudioSystemEffects_Impl for SrApo_Impl {}
+unsafe extern "system" fn inner_addref(this: *mut c_void) -> u32 {
+    base(this, OFF_INNER).refs.fetch_add(1, Ordering::SeqCst) + 1
+}
+
+unsafe extern "system" fn inner_release(this: *mut c_void) -> u32 {
+    let s = base(this, OFF_INNER);
+    let n = s.refs.fetch_sub(1, Ordering::SeqCst) - 1;
+    if n == 0 {
+        drop(Box::from_raw(s as *const SrApo as *mut SrApo));
+        OBJECTS.fetch_sub(1, Ordering::SeqCst);
+    }
+    n
+}
+
+// --- IAudioProcessingObject ---
+unsafe extern "system" fn apo_reset(_: *mut c_void) -> HRESULT {
+    S_OK
+}
+unsafe extern "system" fn apo_latency(_: *mut c_void, out: *mut i64) -> HRESULT {
+    if out.is_null() {
+        return E_POINTER;
+    }
+    *out = 0; // latência zero
+    S_OK
+}
+unsafe extern "system" fn apo_regprops(_: *mut c_void, out: *mut *mut APO_REG_PROPERTIES) -> HRESULT {
+    log("GetRegistrationProperties");
+    if out.is_null() {
+        return E_POINTER;
+    }
+    let p = CoTaskMemAlloc(std::mem::size_of::<APO_REG_PROPERTIES>()) as *mut APO_REG_PROPERTIES;
+    if p.is_null() {
+        return E_OUTOFMEMORY;
+    }
+    p.write(reg_properties());
+    *out = p;
+    S_OK
+}
+unsafe extern "system" fn apo_initialize(this: *mut c_void, size: u32, data: *const u8) -> HRESULT {
+    base(this, OFF_APO).core.initialize(size, data)
+}
+unsafe fn check_format(which: &str, requested: *mut c_void, out: *mut *mut c_void) -> HRESULT {
+    if out.is_null() || requested.is_null() {
+        return E_POINTER;
+    }
+    let Some(req) = IAudioMediaType::from_raw_borrowed(&requested) else { return E_POINTER };
+    let ok = format_ok(req);
+    log(&format!("{which} {:?} ok={ok}", format_info(req)));
+    if ok {
+        *out = req.clone().into_raw(); // devolve o mesmo formato (com AddRef)
+        S_OK
+    } else {
+        *out = std::ptr::null_mut();
+        APOERR_FORMAT_NOT_SUPPORTED
+    }
+}
+unsafe extern "system" fn apo_input_fmt(_: *mut c_void, _opp: *mut c_void, req: *mut c_void, out: *mut *mut c_void) -> HRESULT {
+    check_format("IsInputFormatSupported", req, out)
+}
+unsafe extern "system" fn apo_output_fmt(_: *mut c_void, _opp: *mut c_void, req: *mut c_void, out: *mut *mut c_void) -> HRESULT {
+    check_format("IsOutputFormatSupported", req, out)
+}
+unsafe extern "system" fn apo_channels(_: *mut c_void, out: *mut u32) -> HRESULT {
+    if out.is_null() {
+        return E_POINTER;
+    }
+    *out = 0;
+    S_OK
+}
+
+// --- IAudioProcessingObjectRT ---
+unsafe extern "system" fn rt_process(this: *mut c_void, nin: u32, ins: *const *const APO_CONNECTION_PROPERTY, nout: u32, outs: *mut *mut APO_CONNECTION_PROPERTY) {
+    base(this, OFF_RT).core.process(nin, ins, nout, outs)
+}
+unsafe extern "system" fn rt_calc(_: *mut c_void, n: u32) -> u32 {
+    n
+}
+
+// --- IAudioProcessingObjectConfiguration ---
+unsafe extern "system" fn cfg_lock(this: *mut c_void, nin: u32, ins: *const *const APO_CONNECTION_DESCRIPTOR, nout: u32, outs: *const *const APO_CONNECTION_DESCRIPTOR) -> HRESULT {
+    base(this, OFF_CFG).core.lock(nin, ins, nout, outs)
+}
+unsafe extern "system" fn cfg_unlock(this: *mut c_void) -> HRESULT {
+    base(this, OFF_CFG).core.unlock()
+}
+
+static VT_APO: IAudioProcessingObject_Vtbl = IAudioProcessingObject_Vtbl {
+    base__: IUnknown_Vtbl { QueryInterface: apo_qi, AddRef: apo_addref, Release: apo_release },
+    Reset: apo_reset,
+    GetLatency: apo_latency,
+    GetRegistrationProperties: apo_regprops,
+    Initialize: apo_initialize,
+    IsInputFormatSupported: apo_input_fmt,
+    IsOutputFormatSupported: apo_output_fmt,
+    GetInputChannelCount: apo_channels,
+};
+static VT_RT: IAudioProcessingObjectRT_Vtbl = IAudioProcessingObjectRT_Vtbl {
+    base__: IUnknown_Vtbl { QueryInterface: rt_qi, AddRef: rt_addref, Release: rt_release },
+    APOProcess: rt_process,
+    CalcInputFrames: rt_calc,
+    CalcOutputFrames: rt_calc,
+};
+static VT_CFG: IAudioProcessingObjectConfiguration_Vtbl = IAudioProcessingObjectConfiguration_Vtbl {
+    base__: IUnknown_Vtbl { QueryInterface: cfg_qi, AddRef: cfg_addref, Release: cfg_release },
+    LockForProcess: cfg_lock,
+    UnlockForProcess: cfg_unlock,
+};
+static VT_SFX: IAudioSystemEffects_Vtbl = IAudioSystemEffects_Vtbl {
+    base__: IUnknown_Vtbl { QueryInterface: sfx_qi, AddRef: sfx_addref, Release: sfx_release },
+};
+static VT_INNER: IUnknown_Vtbl = IUnknown_Vtbl { QueryInterface: inner_qi, AddRef: inner_addref, Release: inner_release };
+
+/// Cria o objeto. `outer` = IUnknown de quem agrega (ou nulo). Devolve o IUnknown interno com 1 referência.
+unsafe fn create(outer: *mut c_void) -> *mut c_void {
+    let b = Box::new(SrApo {
+        apo: &VT_APO,
+        rt: &VT_RT,
+        cfg: &VT_CFG,
+        sfx: &VT_SFX,
+        inner: &VT_INNER,
+        outer: std::ptr::null_mut(),
+        refs: AtomicU32::new(1),
+        core: Core::new(),
+    });
+    let raw = Box::into_raw(b);
+    OBJECTS.fetch_add(1, Ordering::SeqCst);
+    let inner = (raw as *mut u8).add(OFF_INNER) as *mut c_void;
+    (*raw).outer = if outer.is_null() { inner } else { outer };
+    inner
+}
 
 // ---------------- fábrica COM ----------------
 
@@ -241,17 +404,19 @@ impl IClassFactory_Impl for Factory_Impl {
         let iid_v = unsafe { *iid };
         log(&format!("CreateInstance agregado={} iid={:?}", outer.is_some(), iid_v));
         unsafe { *object = std::ptr::null_mut() };
-        // O audiodg cria APOs "agregados" (embutidos num objeto dele) e pede IUnknown.
-        // Pela regra do COM, agregação só pode pedir IUnknown.
+        // Regra do COM: quem agrega só pode pedir IUnknown.
         if outer.is_some() && iid_v != IUnknown::IID {
             return Err(CLASS_E_NOAGGREGATION.into());
         }
-        // Versão 1: entregamos o nosso IUnknown. O objeto do Windows consulta as interfaces
-        // do APO por ele; consultas entre interfaces do APO funcionam porque são todas nossas.
-        let unk: IUnknown = SrApo::default().into();
-        let r = unsafe { unk.query(iid, object) };
-        log(&format!("  -> {:?}", r));
-        r.ok()
+        let outer_raw = outer.as_ref().map(|u| u.as_raw()).unwrap_or(std::ptr::null_mut());
+        unsafe {
+            let inner = create(outer_raw);
+            // QI pelo IUnknown interno e solta a referência inicial
+            let hr = inner_qi(inner, iid, object);
+            inner_release(inner);
+            log(&format!("  -> {:?}", hr));
+            hr.ok()
+        }
     }
 
     fn LockServer(&self, lock: BOOL) -> Result<()> {
@@ -271,14 +436,11 @@ extern "system" fn DllGetClassObject(clsid: *const GUID, iid: *const GUID, out: 
             return E_POINTER;
         }
         *out = std::ptr::null_mut();
-        log("DllGetClassObject");
         if *clsid != CLSID_SR_APO {
             return CLASS_E_CLASSNOTAVAILABLE;
         }
         let f: IClassFactory = Factory.into();
-        let r = f.query(iid, out);
-        log(&format!("  fabrica iid={:?} -> {:?}", *iid, r));
-        r
+        f.query(iid, out)
     }
 }
 

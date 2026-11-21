@@ -148,3 +148,69 @@ fn engine_applies_config_and_never_clips() {
     assert_ne!(buf, orig, "a configuração do arquivo foi aplicada");
     assert!(buf.iter().all(|v| v.abs() <= 0.8913 + 1e-4));
 }
+
+/// Objeto "de fora" mínimo, como o do audiodg: guarda o IUnknown interno do APO
+/// e repassa a ele as consultas que não conhece.
+#[repr(C)]
+struct Outer {
+    vt: *const windows_core::IUnknown_Vtbl,
+    refs: std::sync::atomic::AtomicU32,
+    inner: *mut c_void,
+}
+unsafe extern "system" fn o_qi(this: *mut c_void, iid: *const GUID, out: *mut *mut c_void) -> HRESULT {
+    let o = &*(this as *const Outer);
+    if *iid == IUnknown::IID {
+        *out = this;
+        o_addref(this);
+        return S_OK;
+    }
+    let vt = &**(o.inner as *const *const windows_core::IUnknown_Vtbl);
+    (vt.QueryInterface)(o.inner, iid, out)
+}
+unsafe extern "system" fn o_addref(this: *mut c_void) -> u32 {
+    (*(this as *const Outer)).refs.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1
+}
+unsafe extern "system" fn o_release(this: *mut c_void) -> u32 {
+    (*(this as *const Outer)).refs.fetch_sub(1, std::sync::atomic::Ordering::SeqCst) - 1
+}
+static OUTER_VT: windows_core::IUnknown_Vtbl = windows_core::IUnknown_Vtbl { QueryInterface: o_qi, AddRef: o_addref, Release: o_release };
+
+#[test]
+fn aggregated_like_audiodg() {
+    unsafe {
+        let mut outer = Outer { vt: &OUTER_VT, refs: std::sync::atomic::AtomicU32::new(1), inner: std::ptr::null_mut() };
+        let outer_ptr = &mut outer as *mut Outer as *mut c_void;
+        let mut f: *mut c_void = std::ptr::null_mut();
+        DllGetClassObject(&sr_apo::CLSID_SR_APO, &IClassFactory::IID, &mut f).ok().unwrap();
+        let factory = IClassFactory::from_raw(f);
+        let outer_unk = IUnknown::from_raw_borrowed(&outer_ptr).unwrap();
+        // pedir outra interface ao agregar é proibido
+        let mut x: *mut c_void = std::ptr::null_mut();
+        let vt = factory.vtable();
+        assert_eq!((vt.CreateInstance)(factory.as_raw(), outer_unk.as_raw(), &IAudioProcessingObject::IID, &mut x), CLASS_E_NOAGGREGATION);
+        // agregar pedindo IUnknown: recebe o IUnknown interno
+        let mut inner: *mut c_void = std::ptr::null_mut();
+        assert_eq!((vt.CreateInstance)(factory.as_raw(), outer_unk.as_raw(), &IUnknown::IID, &mut inner), S_OK);
+        assert!(!inner.is_null() && inner != outer_ptr);
+        outer.inner = inner;
+
+        // pelo objeto de fora, consegue as interfaces do APO
+        let apo: IAudioProcessingObject = outer_unk.cast().unwrap();
+        let refs_before = outer.refs.load(std::sync::atomic::Ordering::SeqCst);
+        let rt: IAudioProcessingObjectRT = apo.cast().unwrap();
+        // AddRef/QI das interfaces do APO vão para o objeto de fora (regra da agregação)
+        assert!(outer.refs.load(std::sync::atomic::Ordering::SeqCst) > refs_before);
+        // QI a partir de uma interface do APO devolve o IUnknown DE FORA
+        let back: IUnknown = rt.cast().unwrap();
+        assert_eq!(back.as_raw(), outer_ptr);
+
+        assert_eq!(apo.GetLatency().unwrap(), 0);
+        apo.Initialize(&[]).unwrap();
+        drop(back);
+        drop(rt);
+        drop(apo);
+        // o de fora solta o interno: objeto destruído
+        let ivt = &**(inner as *const *const windows_core::IUnknown_Vtbl);
+        assert_eq!((ivt.Release)(inner), 0);
+    }
+}
