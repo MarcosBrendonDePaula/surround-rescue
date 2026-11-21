@@ -156,8 +156,9 @@ impl Processor {
         }
         self.test = s.test_speaker;
         // 0..100: 50 = ambiente padrão; 100 = o dobro
-        self.virt.amb_gain = s.spatial / 50.0;
-        self.virt.room_gain = if s.room { s.spatial / 50.0 } else { 0.0 };
+        // ambiente contido: em 100 ainda soa como uma música só (antes 100 dobrava e separava os ouvidos)
+        self.virt.amb_gain = s.spatial / 100.0;
+        self.virt.room_gain = if s.room { s.spatial / 100.0 } else { 0.0 };
         let was = self.upmix_on;
         self.upmix_on = s.spatial > 0.0;
         if self.upmix_on && !was {

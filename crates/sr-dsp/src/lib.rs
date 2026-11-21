@@ -135,7 +135,8 @@ impl Settings {
         if self.clarity_enabled { self.clarity_volume / 100.0 * 6.0 } else { 0.0 }
     }
     pub fn width(&self) -> f64 {
-        if self.stereo_enhanced { 1.4 } else { 1.0 }
+        // abertura moderada: 1,4 espalhava demais junto com o surround
+        if self.stereo_enhanced { 1.2 } else { 1.0 }
     }
     /// Ganho do sinal cruzado (o ouvido oposto também ouve cada caixa).
     pub fn cross_gain(&self) -> f64 {

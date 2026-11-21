@@ -140,7 +140,7 @@ mod tests {
             ..Settings::default()
         };
         let pre = safe_preamp(&s);
-        let worst = pre + 12.0 + db(1.0 + s.cross_gain()) + db(1.4);
+        let worst = pre + 12.0 + db(1.0 + s.cross_gain()) + db(s.width());
         assert!(worst <= 6.0 - 1.0 + 0.05, "{worst}");
     }
 

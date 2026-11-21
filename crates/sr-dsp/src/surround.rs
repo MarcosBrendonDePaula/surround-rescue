@@ -412,7 +412,7 @@ impl Virtualizer {
         let a = [self.amb_buf[i(d[0])], self.amb_buf2[i(d[1])], self.amb_buf[i(d[2])], self.amb_buf2[i(d[3])]];
         self.pos = (self.pos + 1) % BUF;
         let g = self.amb_gain;
-        self.render([fl, fr, c, 0.8 * g * a[0], 0.8 * g * a[1], 0.6 * g * a[2], 0.6 * g * a[3]], 0.0)
+        self.render([fl, fr, c, 0.5 * g * a[0], 0.5 * g * a[1], 0.35 * g * a[2], 0.35 * g * a[3]], 0.0)
     }
 
     /// Quadro multicanal na ordem do Windows: FL FR C LFE BL BR SL SR (5.1: FL FR C LFE BL BR).

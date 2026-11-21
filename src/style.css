@@ -596,3 +596,13 @@ h1 { margin-top: 0; }
 .gd-slider span { color: var(--ink); }
 .gd-slider output { font: 600 14px var(--display); color: var(--amber); }
 .gd-slider input { grid-column: 1 / -1; }
+
+/* mesa: entrada (antes do volume) e saída (depois), cada uma com esquerdo e direito */
+.strip { width: 124px; min-width: 124px; }
+.strip-body { grid-template-columns: 20px 22px 26px 20px; gap: 3px; }
+.strip.master .strip-body { grid-template-columns: 22px 34px; }
+.meters.in .meter i.post { background: linear-gradient(0deg, #6f8fd6 0px, #6f8fd6 150px, var(--warn) 185px, var(--bad) 212px); background-size: 100% 216px; background-position: bottom; }
+.meters .meter { width: 9px; }
+.strip-lr { width: 100%; justify-content: space-between; gap: 0; padding: 0 6px; font-size: 9px; }
+.strip-lr span { width: auto; }
+.strip.master .strip-lr { justify-content: center; }

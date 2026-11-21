@@ -439,13 +439,16 @@ function mixStrip(g, e, i) {
     <span class="strip-name" title="${esc(name)}">${esc(trunc(name, 12))}</span>
     <div class="strip-pan"><input type="range" class="pan" min="-100" max="100" step="1" value="${Math.round(pan * 100)}" aria-label="Pan de ${esc(name)}"><output>${panText(pan)}</output></div>
     <div class="strip-body">
+      <div class="meters in" title="Entrada: o que chega, esquerdo e direito" aria-hidden="true">
+        <div class="meter" data-in="0"><i class="post"></i><b></b></div><div class="meter" data-in="1"><i class="post"></i><b></b></div>
+      </div>
       <div class="scale" aria-hidden="true">${[6, 0, -6, -12, -24, -48].map((d) => `<span style="bottom:${((d + 60) / 66) * 100}%">${d > 0 ? "+" + d : d}</span>`).join("")}</div>
       <input type="range" class="fader" min="-60" max="6" step="0.5" value="${toDb(e.gain)}" aria-label="Volume de ${esc(name)}">
-      <div class="meters" title="Esquerdo e direito · claro: o que entra · cor: depois do fader e do pan" aria-hidden="true">
-        <div class="meter" data-ch="0"><i class="pre"></i><i class="post"></i><b></b></div><div class="meter" data-ch="1"><i class="pre"></i><i class="post"></i><b></b></div>
+      <div class="meters" title="Saída: depois do volume e do pan, esquerdo e direito" aria-hidden="true">
+        <div class="meter" data-ch="0"><i class="post"></i><b></b></div><div class="meter" data-ch="1"><i class="post"></i><b></b></div>
       </div>
     </div>
-    <div class="strip-lr" aria-hidden="true"><span>E</span><span>D</span></div>
+    <div class="strip-lr" aria-hidden="true"><span>entra</span><span>sai</span></div>
     <output class="strip-db">${dbText(e.gain)}</output>
     <div class="strip-ms"><button class="strip-mute" title="Mudo">M</button><button class="strip-solo" title="Solo (só as entradas em solo tocam)">S</button></div>
   </div>`;
@@ -457,7 +460,7 @@ function masterStrip(n) {
     <span class="strip-name">Master</span>
     <div class="strip-pan"></div>
     <div class="strip-body"><div class="scale" aria-hidden="true">${[6, 0, -6, -12, -24, -48].map((d) => `<span style="bottom:${((d + 60) / 66) * 100}%">${d > 0 ? "+" + d : d}</span>`).join("")}</div><div class="meters wide" aria-hidden="true"><div class="meter" data-ch="0"><i class="pre"></i><i class="post"></i><b></b></div><div class="meter" data-ch="1"><i class="pre"></i><i class="post"></i><b></b></div></div></div>
-    <div class="strip-lr" aria-hidden="true"><span>E</span><span>D</span></div>
+    <div class="strip-lr" aria-hidden="true"><span>E · D</span></div>
     <output class="strip-db strip-peak">−∞</output>
     <div class="strip-ms"></div>
   </div>`;
@@ -470,7 +473,7 @@ function meterSet(el, v, pre = v) {
   const pct = meterPct(v);
   const hold = Math.max(pct, (Number(el.dataset.hold) || 0) - 1.2);
   el.dataset.hold = hold;
-  el.querySelector(".pre").style.height = `${meterPct(pre)}%`;
+  el.querySelector(".pre")?.style.setProperty("height", `${meterPct(pre)}%`);
   el.querySelector(".post").style.height = `${pct}%`;
   el.querySelector("b").style.bottom = `${hold}%`;
   el.classList.toggle("hot", v >= 0.89);
@@ -487,8 +490,9 @@ function startMeters(box, g) {
       if (!e) return;
       const pre = lvLR(lv[st.dataset.src]);
       const pg = panLR(e.pan || 0);
-      const g = e.mute ? 0 : e.gain;
-      st.querySelectorAll(".meter").forEach((m) => { const c = Number(m.dataset.ch); meterSet(m, pre[c] * g * pg[c], pre[c]); });
+      const vol = e.mute ? 0 : e.gain;
+      st.querySelectorAll(".meter[data-in]").forEach((m) => meterSet(m, pre[Number(m.dataset.in)]));
+      st.querySelectorAll(".meter[data-ch]").forEach((m) => { const c = Number(m.dataset.ch); meterSet(m, pre[c] * vol * pg[c]); });
     });
     box.querySelectorAll(".strip[data-master]").forEach((st) => {
       const v = lvLR(lv[st.dataset.master]);

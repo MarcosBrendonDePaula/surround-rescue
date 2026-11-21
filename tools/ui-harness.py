@@ -55,7 +55,7 @@ window.__TAURI__ = {
     if (cmd === "get_chain") return __D.chains[a.endpoint] || __D.chains[String(a.endpoint).toLowerCase()] || { plugins: [] };
     if (cmd === "get_levels") {
       // níveis reais com variação, para os medidores mexerem
-      const o = {}; for (const [k, v] of Object.entries(__D.levels)) { o[k] = {}; for (const [n, x] of Object.entries(v)) o[k][n] = Math.min(1, x * (8 + 4 * Math.random())); }
+      const o = {}; for (const [k, v] of Object.entries(__D.levels)) { o[k] = {}; for (const [n, x] of Object.entries(v)) o[k][n] = Array.isArray(x) ? x.map((y) => Math.min(1, y * (8 + 4 * Math.random()))) : Math.min(1, x * (8 + 4 * Math.random())); }
       return o;
     }
     if (cmd in __D) return JSON.parse(JSON.stringify(__D[cmd]));
