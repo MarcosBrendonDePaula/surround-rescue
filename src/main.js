@@ -33,6 +33,7 @@ function render() {
   $("#p-del").disabled = c.profiles.length < 2;
 
   // campos do perfil
+  if ($("#surround-style")) $("#surround-style").value = s.surround_style || "razer";
   for (const el of $$("[data-s]")) {
     const k = el.dataset.s;
     if (el.type === "checkbox") el.checked = s[k];
@@ -358,6 +359,7 @@ function bind() {
 
   // testes
   $("#test-round").addEventListener("click", () => engineTest("ALL"));
+  $("#surround-style").addEventListener("change", (e) => { cur().surround_style = e.target.value; render(); saveSoon(); });
   $("#test-stop").addEventListener("click", () => engineTest(null));
   window.addEventListener("beforeunload", () => { if (testing) invoke("engine_test", { speaker: -1 }); });
   bindStageDrag();

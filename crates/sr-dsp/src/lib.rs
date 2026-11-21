@@ -41,6 +41,9 @@ pub struct Settings {
     pub spatial: f64,
     /// Sala virtual: um eco curto que tira o som de dentro da cabeça
     pub room: bool,
+    /// Estilo do surround para som estéreo: "razer" (caixas laterais, como o Nahimic) ou "amplo"
+    /// (frente, centro e ambiente)
+    pub surround_style: String,
     // ---- ÁUDIO ----
     /// "Estéreo melhorado" (WidenStereoSound)
     pub stereo_enhanced: bool,
@@ -72,6 +75,7 @@ impl Default for Settings {
             test_speaker: -1,
             spatial: 50.0,
             room: true,
+            surround_style: "razer".into(),
             stereo_enhanced: false,
             bass_enabled: true,
             bass_level: 20.0,
@@ -92,6 +96,8 @@ impl Default for Settings {
 pub fn eq_presets() -> Vec<(&'static str, &'static str, [f64; 10])> {
     vec![
         ("padrao", "Padrão", [0.0; 10]),
+        // curva medida no motor Nahimic do Kraken (som do meio do estéreo, varredura a −12 dBFS)
+        ("razer", "Razer (Nahimic)", [8.0, 5.0, 0.5, -10.0, -11.0, -6.0, -1.5, -3.0, -8.0, -5.0]),
         ("jogo", "Jogo (FPS)", [-2.0, -1.0, 0.0, -1.0, 0.0, 2.0, 4.0, 4.0, 2.0, 0.0]),
         ("filme", "Filme", [3.0, 3.0, 2.0, 0.0, -1.0, 0.0, 1.0, 2.0, 2.0, 1.0]),
         ("musica", "Música", [3.0, 2.0, 1.0, 0.0, -1.0, -1.0, 0.0, 1.0, 2.0, 3.0]),

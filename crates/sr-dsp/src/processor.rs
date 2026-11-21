@@ -81,6 +81,7 @@ pub struct Processor {
     virt: Virtualizer,
     upmix: Upmix,
     upmix_on: bool,
+    razer: bool,
     test: i32,
     test_n: u64,
     test_seed: u32,
@@ -108,6 +109,7 @@ impl Processor {
             virt: Virtualizer::new(sr),
             upmix: Upmix::new(sr),
             upmix_on: false,
+            razer: true,
             test: -1,
             test_n: 0,
             test_seed: 1,
@@ -139,7 +141,8 @@ impl Processor {
         let s = s.sanitized();
         self.enabled = s.enabled;
         let eq_max = if s.eq_enabled { s.eq.iter().cloned().fold(0.0, f64::max) } else { 0.0 };
-        let boost = s.bass_db().max(s.presence_db()).max(s.voice_db()).max(eq_max).max(0.0);
+        // o equalizador conta pela metade: seus picos são estreitos (uma faixa); o graves é largo e conta inteiro
+        let boost = s.bass_db().max(s.presence_db()).max(s.voice_db()).max(0.5 * eq_max).max(0.0);
         // folga antes dos filtros: 3 dB fixos (como a Razer) + metade do maior reforço; o resto dos picos
         // fica com o limitador. Antes era o reforço inteiro: aumentar o graves abaixava todo o resto.
         // folga = 3 dB fixos (como a Razer) + o reforço inteiro: música gravada alta já chega perto do
@@ -159,8 +162,12 @@ impl Processor {
         // ambiente contido: em 100 ainda soa como uma música só (antes 100 dobrava e separava os ouvidos)
         self.virt.amb_gain = s.spatial / 100.0;
         self.virt.room_gain = if s.room { s.spatial / 100.0 } else { 0.0 };
+        let razer = s.surround_style != "amplo";
+        self.razer = razer;
+        self.virt.set_razer_style(razer);
         let was = self.upmix_on;
-        self.upmix_on = s.spatial > 0.0;
+        // o estilo Razer não separa centro/ambiente: sem a análise por frequência (e sem os 10,7 ms)
+        self.upmix_on = s.spatial > 0.0 && !razer;
         if self.upmix_on && !was {
             self.upmix.reset();
         }
@@ -246,6 +253,7 @@ impl Processor {
                     buf[1] = r as f32;
                     self.virt.multi(&buf[..f.len().min(8)])
                 }
+                None if self.razer => self.virt.side_pair(l, r),
                 None => {
                     // centro e ambiente por frequência; o seco sai da mesma análise (mesmo atraso)
                     let [fl, fr, c, al, ar] = self.upmix.process(l as f32, r as f32);
@@ -487,9 +495,12 @@ mod tests {
         p.set(&Settings { eq: [3.0, -2.0, 1.0, 0.0, 4.0, 0.0, -3.0, 2.0, 0.0, 1.0], eq_enabled: true, spatial: 0.0, ..Settings::default() });
         let la = p.latency();
         assert_eq!(la, 72, "1,5 ms a 48 kHz");
-        // com surround, soma a análise por frequência (512 amostras = 10,7 ms)
+        // estilo Razer (padrão): sem análise por frequência, sem atraso extra
         let mut q = Processor::new(48000.0);
         q.set(&Settings::default());
+        assert_eq!(q.latency(), 72);
+        // estilo amplo: soma a análise por frequência (512 amostras = 10,7 ms)
+        q.set(&Settings { surround_style: "amplo".into(), ..Settings::default() });
         assert_eq!(q.latency(), 72 + 512);
         let mut l = vec![0.0f32; 256];
         let mut r = vec![0.0f32; 256];
@@ -536,9 +547,8 @@ mod tests {
             rms_db(&l[24000..])
         };
         let diff = measure(&mut eq) - measure(&mut base);
-        // +6 dB na banda, descontada a folga do reforço (o reforço inteiro): a banda fica no nível
-        // original e o resto desce 6 dB (é isso que evita o limitador "bombear")
-        assert!(diff.abs() < 0.5, "diferença {diff}");
+        // +6 dB na banda, descontada a folga do equalizador (metade do maior ganho = 3 dB): sobra +3 dB
+        assert!((diff - 3.0).abs() < 0.5, "diferença {diff}");
         let mut s2 = s.clone();
         s2.eq[5] = 0.0;
         s2.eq[9] = 6.0; // reserva igual, mas sem reforço em 1 kHz
@@ -551,7 +561,7 @@ mod tests {
     fn crossfeed_reaches_opposite_ear_late() {
         let sr = 48000.0;
         let mut p = Processor::new(sr);
-        p.set(&Settings { front_angle: 90.0, spatial: 100.0, ..flat() });
+        p.set(&Settings { front_angle: 90.0, spatial: 100.0, surround_style: "amplo".into(), ..flat() });
         let mut l = vec![0.0f32; 3000];
         let mut r = vec![0.0f32; 3000];
         l[0] = 0.5;

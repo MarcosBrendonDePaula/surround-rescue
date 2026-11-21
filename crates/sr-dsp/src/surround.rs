@@ -166,6 +166,10 @@ pub struct Virtualizer {
     /// peso de cada caixa em cada ouvido nos graves (nível da resposta em 300 Hz)
     low_w: [[f32; 2]; SPEAKERS],
     out_k: f32,
+    /// par de caixas por onde o estéreo toca: [0,1] = frente (estilo amplo), [3,4] = laterais (estilo Razer)
+    pair: [usize; 2],
+    angles: (f64, f64, f64),
+    calibrated: Option<(f64, f64, f64, [usize; 2])>,
     low_lp: [[Biquad; 2]; 2],
     high_hp: [[Biquad; 2]; 2],
     /// equalizador automático (9 oitavas) que deixa o som da frente com o timbre original
@@ -195,6 +199,9 @@ impl Virtualizer {
             room_gain: 1.0,
             low_w: [[1.0; 2]; SPEAKERS],
             out_k: 0.5,
+            pair: [0, 1],
+            angles: (30.0, 90.0, 150.0),
+            calibrated: None,
             low_lp: [[Biquad::default(); 2]; 2],
             high_hp: [[Biquad::default(); 2]; 2],
             tone: [[Biquad::default(); TONE_BANDS]; 2],
@@ -209,9 +216,37 @@ impl Virtualizer {
         self.set_angles(front_angle, 90.0, 150.0);
     }
 
+    /// Estilo Razer: o estéreo toca nas caixas laterais (como o Nahimic mede: cruzamento a −12 dB,
+    /// 0,7 ms), sem centro, ambiente nem sala. Falso: estilo amplo (frente + centro + ambiente).
+    pub fn set_razer_style(&mut self, on: bool) {
+        let pair = if on { [3, 4] } else { [0, 1] };
+        if pair != self.pair {
+            self.pair = pair;
+            let (f, s, r) = self.angles;
+            self.set_angles(f, s, r);
+        }
+    }
+
+    /// Estéreo nas caixas laterais (estilo Razer).
+    #[inline]
+    pub fn side_pair(&mut self, l: f64, r: f64) -> (f64, f64) {
+        // o Nahimic manda cada lado para o ouvido oposto a ~−12 dB em todas as frequências; a resposta
+        // do KEMAR a 90° passa quase nada de agudo para o outro ouvido, então soma essa mistura antes
+        // (dividida para o que é igual nos dois lados não mudar de volume)
+        const XF: f64 = 0.3;
+        let k = 1.0 / (1.0 + XF);
+        self.render([0.0, 0.0, 0.0, k * (l + XF * r), k * (r + XF * l), 0.0, 0.0], 0.0)
+    }
+
     /// Ângulos de cada par de caixas (frente, laterais, traseiras), como a calibração da Razer.
     pub fn set_angles(&mut self, front: f64, side: f64, rear: f64) {
         let (fa, sa, ra) = (front.clamp(10.0, 80.0), side.clamp(60.0, 120.0), rear.clamp(110.0, 175.0));
+        // recalcular as respostas e o equalizador automático é caro: só quando algo mudou
+        if self.calibrated == Some((fa, sa, ra, self.pair)) {
+            return;
+        }
+        self.calibrated = Some((fa, sa, ra, self.pair));
+        self.angles = (fa, sa, ra);
         let az = [-fa, fa, 0.0, -sa, sa, -ra, ra];
         for (i, a) in az.iter().enumerate() {
             let (l, r, n) = hrir_at(*a, self.sr);
@@ -246,8 +281,8 @@ impl Virtualizer {
         };
         let (mut ph, mut ce) = (0.0f64, 0.0f64);
         for f in [500.0, 700.0, 1000.0, 1400.0, 2000.0, 2800.0, 4000.0] {
-            let (a, b) = mag(&self.ir[0][0][..self.taps], f);
-            let (c, d) = mag(&self.ir[1][0][..self.taps], f);
+            let (a, b) = mag(&self.ir[self.pair[0]][0][..self.taps], f);
+            let (c, d) = mag(&self.ir[self.pair[1]][0][..self.taps], f);
             ph += (a + c).powi(2) + (b + d).powi(2);
             let (e, g) = mag(&self.ir[2][0][..self.taps], f);
             ce += e * e + g * g;
@@ -276,13 +311,14 @@ impl Virtualizer {
         let k = self.out_k as f64;
         // resposta ao impulso das duas caixas somadas no ouvido esquerdo (a IR está invertida no tempo)
         let mut conv = vec![0.0f64; N];
-        for spk in 0..2 {
+        for spk in self.pair {
             let g = self.gains[spk] as f64;
             for t in 0..n {
                 conv[t] += g * self.ir[spk][0][n - 1 - t] as f64;
             }
         }
-        let low_w = (self.gains[0] * self.low_w[0][0] + self.gains[1] * self.low_w[1][0]) as f64;
+        let [p0, p1] = self.pair;
+        let low_w = (self.gains[p0] * self.low_w[p0][0] + self.gains[p1] * self.low_w[p1][0]) as f64;
         let (mut hp, mut lp, mut tq) = (self.high_hp[0], self.low_lp[0], *eq);
         hp.iter_mut().chain(lp.iter_mut()).chain(tq.iter_mut()).for_each(|b| b.reset());
         let mut y = vec![0.0f64; N];

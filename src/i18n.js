@@ -19,7 +19,9 @@
     "Caixas de trás": "Rear speakers", "Intensidade do surround": "Surround intensity", "Sala virtual": "Virtual room",
     "Um eco curto, como o de um quarto, que tira o som de dentro da cabeça. Desligue para um som mais seco.":
       "A short echo, like a small room's, that moves the sound out of your head. Turn it off for a drier sound.",
-    "Dar a volta": "Go around", "Parar o teste": "Stop test", "Parar": "Stop",
+    "Dar a volta": "Go around", "Estilo do surround": "Surround style",
+    "Razer: o som da música fica junto, como no Nahimic": "Razer: music stays together, like Nahimic",
+    "Amplo: centro na frente e ambiente em volta": "Wide: center up front, ambience around you", "Razer (Nahimic)": "Razer (Nahimic)", "Parar o teste": "Stop test", "Parar": "Stop",
     "Clique numa caixa para ouvir o teste. Arraste até o som parecer vir de lá.": "Click a speaker to hear the test. Drag it until the sound seems to come from there.",
     "Estéreo melhorado": "Stereo widening", "Abre o campo estéreo para o som parecer maior.": "Widens the stereo field so the sound feels bigger.",
     "Reforço de graves": "Bass boost", "Mais peso em explosões, música e motores.": "More weight in explosions, music and engines.",
