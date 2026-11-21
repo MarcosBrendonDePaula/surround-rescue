@@ -345,6 +345,7 @@ async function init() {
   refreshStatus();
   plDirsBind();
   enBind();
+  upBind();
 }
 
 init();
@@ -415,6 +416,42 @@ function plDirsRender() {
   $("#cf-total").textContent = PL.found.length
     ? `${PL.found.length} plugins encontrados (${PL.found.filter((f) => f.supported !== false).length} utilizáveis).`
     : "Clique em Procurar de novo para contar os plugins.";
+}
+
+// ---------- atualização ----------
+let UP = null;
+async function upCheck(quiet) {
+  if (!quiet) $("#up-msg").textContent = "Procurando…";
+  try { UP = await invoke("check_update"); } catch (e) { UP = { error: String(e) }; }
+  const tab = document.querySelector('#tabs button[data-tab="configuracoes"]');
+  if (UP.available) {
+    $("#up-msg").textContent = `Versão ${UP.latest} disponível (instalada: ${UP.current}).`;
+    $("#up-notes").textContent = UP.notes || "";
+    $("#up-notes").hidden = !UP.notes;
+    $("#up-install").hidden = false;
+    tab?.classList.add("has-update");
+  } else {
+    $("#up-msg").textContent = UP.error
+      ? `Versão instalada: ${UP.current || "?"}. Não deu para verificar agora (${UP.error}).`
+      : `Versão instalada: ${UP.current}. Está atualizado.`;
+    $("#up-notes").hidden = true;
+    $("#up-install").hidden = true;
+    tab?.classList.remove("has-update");
+  }
+}
+function upBind() {
+  if (!$("#up-check")) return;
+  $("#up-check").addEventListener("click", () => upCheck(false));
+  $("#up-install").addEventListener("click", async () => {
+    if (!UP?.latest) return;
+    $("#up-install").disabled = true;
+    $("#up-msg").textContent = `Baixando a versão ${UP.latest}… o app fecha, instala (aceite o pedido de administrador) e abre de novo.`;
+    try { await invoke("install_update", { version: UP.latest }); }
+    catch (e) { $("#up-msg").textContent = `Não deu para atualizar: ${e}`; $("#up-install").disabled = false; }
+  });
+  upCheck(true);
+  // de novo a cada 6 horas (o app fica aberto em segundo plano)
+  setInterval(() => upCheck(true), 6 * 3600 * 1000);
 }
 
 // ---------- motor nos dispositivos ----------

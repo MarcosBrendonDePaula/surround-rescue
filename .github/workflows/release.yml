@@ -1,0 +1,94 @@
+# Publica uma versão nova quando o version.json muda na main.
+#
+# Como lançar: mude "version" (e "notes") no version.json e faça push na main.
+# Se a tag v<versão> ainda não existe, compila tudo no Windows, gera o instalador e cria a release
+# com ele. O app instalado lê o version.json (raw) e oferece a atualização.
+
+name: Publicar versão
+
+on:
+  push:
+    branches: [main]
+    paths: [version.json]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Ler a versão
+        id: v
+        shell: pwsh
+        run: |
+          $j = Get-Content version.json -Raw | ConvertFrom-Json
+          $v = $j.version
+          if ($v -notmatch '^\d+\.\d+\.\d+$') { throw "versão inválida no version.json: $v" }
+          $exists = [bool](git ls-remote --tags origin "refs/tags/v$v")
+          "version=$v" >> $env:GITHUB_OUTPUT
+          "exists=$($exists.ToString().ToLower())" >> $env:GITHUB_OUTPUT
+          if ($exists) { "A versão v$v já foi publicada; nada a fazer." }
+
+      - name: Rust (64 e 32 bits)
+        if: steps.v.outputs.exists != 'true'
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc, i686-pc-windows-msvc
+
+      - uses: Swatinem/rust-cache@v2
+        if: steps.v.outputs.exists != 'true'
+
+      - uses: actions/setup-node@v4
+        if: steps.v.outputs.exists != 'true'
+        with:
+          node-version: 20
+
+      - name: Dependências do empacotador
+        if: steps.v.outputs.exists != 'true'
+        run: npm ci
+
+      - name: Baixar o Equalizer APO (instalador de terceiros, GPL-2.0)
+        if: steps.v.outputs.exists != 'true'
+        shell: pwsh
+        run: |
+          $dst = "src-tauri/resources/EqualizerAPO-x64.exe"
+          Invoke-WebRequest -Uri "https://sourceforge.net/projects/equalizerapo/files/1.4/EqualizerAPO-x64-1.4.exe/download" -OutFile $dst -UserAgent "Wget" -MaximumRedirection 10
+          if ((Get-Item $dst).Length -lt 1MB) { throw "download do Equalizer APO falhou" }
+
+      - name: Versão no tauri.conf.json
+        if: steps.v.outputs.exists != 'true'
+        shell: pwsh
+        run: |
+          $p = "src-tauri/tauri.conf.json"
+          $c = Get-Content $p -Raw | ConvertFrom-Json
+          $c.version = "${{ steps.v.outputs.version }}"
+          $c | ConvertTo-Json -Depth 32 | Set-Content $p -Encoding utf8
+
+      - name: Compilar motor (APO) e executor de 32 bits
+        if: steps.v.outputs.exists != 'true'
+        run: |
+          cargo build --release -p sr-apo
+          cargo build --release -p sr-bridge32 --target i686-pc-windows-msvc
+
+      - name: Compilar o app e gerar o instalador
+        if: steps.v.outputs.exists != 'true'
+        run: npx tauri build
+
+      - name: Publicar a release
+        if: steps.v.outputs.exists != 'true'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $v = "${{ steps.v.outputs.version }}"
+          $src = Get-ChildItem "target/release/bundle/nsis" -Filter "*_${v}_x64-setup.exe" | Select-Object -First 1
+          if (-not $src) { throw "instalador não encontrado" }
+          # nome fixo: é o que o atualizador do app baixa
+          $asset = "SurroundRescue-$v-setup.exe"
+          Copy-Item $src.FullName $asset
+          $notes = (Get-Content version.json -Raw | ConvertFrom-Json).notes
+          gh release create "v$v" $asset --title "Surround Rescue $v" --notes "$notes" --target "${{ github.sha }}"

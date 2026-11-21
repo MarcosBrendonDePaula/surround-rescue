@@ -1,0 +1,4 @@
+{
+  "version": "0.5.0",
+  "notes": "Fluxo com caixa VST (VST3, VST2 64/32 bits e CLAP), navegador de plugins, mesa de som com medidores, mandar som para o microfone, motor instalável pelo app e atualização automática."
+}
