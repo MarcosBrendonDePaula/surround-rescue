@@ -22,6 +22,16 @@ pub enum NodeKind {
     Plugin { plugin: usize },
     /// Envia o que chega aqui para outro dispositivo de saída ({guid}); também repassa adiante.
     Send { device: String },
+    /// Som de um programa (captura por processo), ex.: "spotify.exe"
+    App { exe: String },
+    /// Som de um dispositivo de entrada ({guid}), ex.: outro microfone
+    Receive { device: String },
+    /// Bloco nativo (ganho, inverter, pan, mono, trocar L/R, atraso, filtros)
+    Fx {
+        fx: crate::blocks::Fx,
+        #[serde(default)]
+        value: f32,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -262,6 +272,12 @@ mod tests {
         assert_eq!(exec(&g, &[], 1.0), Some(0.5));
         let t = serde_json::to_string(&g).unwrap();
         assert!(t.contains(r#""kind":"send","device":"{x}""#), "{t}");
+    }
+
+    #[test]
+    fn fx_node_json() {
+        let n: Node = serde_json::from_str(r#"{"id":"g","kind":"fx","fx":"gain","value":-6,"x":0,"y":0}"#).unwrap();
+        assert_eq!(n.kind, NodeKind::Fx { fx: crate::blocks::Fx::Gain, value: -6.0 });
     }
 
     #[test]

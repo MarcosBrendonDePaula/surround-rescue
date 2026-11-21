@@ -4656,9 +4656,11 @@ dependencies = [
  "serde",
  "serde_json",
  "sr-bridge",
+ "sr-dsp",
  "sr-ipc",
  "vst3-host",
  "windows 0.62.2",
+ "windows-core",
 ]
 
 [[package]]

@@ -3,7 +3,19 @@
 
 const NODE_W = 160;
 const NODE_H = 56;
-const FL = { sel: null, drag: null, wire: null, timer: null };
+const FL = { sel: null, drag: null, wire: null, timer: null, apps: [] };
+
+// blocos nativos: nome, unidade, faixa e valor inicial
+const FX = {
+  gain: { name: "Ganho", unit: "dB", min: -60, max: 24, step: 0.5, def: 0 },
+  invert: { name: "Inverter", hint: "somado = subtrai" },
+  pan: { name: "Pan", unit: "", min: -100, max: 100, step: 1, def: 0 },
+  mono: { name: "Mono", hint: "L e R viram um só" },
+  swap: { name: "Trocar L/R", hint: "Inverte os lados" },
+  delay: { name: "Atraso", unit: "ms", min: 0, max: 500, step: 1, def: 50 },
+  lowpass: { name: "Passa-baixa", unit: "Hz", min: 200, max: 20000, step: 50, def: 8000 },
+  highpass: { name: "Passa-alta", unit: "Hz", min: 20, max: 2000, step: 5, def: 120 },
+};
 
 function serialGraph(n) {
   const nodes = [{ id: "in", kind: "input", x: 30, y: 180 }];
@@ -22,7 +34,7 @@ function serialGraph(n) {
 /// O fluxo é uma fila simples (a lista consegue representar)?
 function isSerial(g, n) {
   if (!g) return true;
-  if (g.nodes.some((x) => x.kind === "mixer" || x.kind === "send") || g.edges.length !== n + 1) return false;
+  if (g.nodes.some((x) => !["input", "output", "plugin"].includes(x.kind)) || g.edges.length !== n + 1) return false;
   let cur = "in";
   for (let i = 0; i <= n; i++) {
     const outs = g.edges.filter((e) => e.from === cur);
@@ -59,6 +71,15 @@ function nodeText(n) {
   if (n.kind === "input") return ["Windows", "som de todos os programas"];
   if (n.kind === "output") return ["Saída", "Surround Rescue + anti-estouro"];
   if (n.kind === "mixer") return ["Mixer", "soma o que chega"];
+  if (n.kind === "app") return [`Programa: ${n.exe || "?"}`, "som só deste programa"];
+  if (n.kind === "receive") {
+    const d = PL.devices.find((x) => x.id === n.device);
+    return [`Receber: ${d ? d.name : "dispositivo"}`, d ? d.device : "escolha a entrada"];
+  }
+  if (n.kind === "fx") {
+    const f = FX[n.fx] || { name: n.fx };
+    return [f.name, f.unit !== undefined ? `${n.value} ${f.unit}`.trim() : f.hint || "bloco nativo"];
+  }
   if (n.kind === "send") {
     const d = PL.devices.find((x) => x.id === n.device);
     return [`Enviar: ${d ? d.name : "dispositivo"}`, d ? `${d.device} · +~30 ms` : "escolha o dispositivo"];
@@ -106,7 +127,7 @@ function flRender() {
       <rect class="box" width="${NODE_W}" height="${NODE_H}" rx="10"/>
       <text class="title" x="14" y="23">${esc(t.length > 18 ? t.slice(0, 17) + "…" : t)}</text>
       <text class="sub" x="14" y="41">${esc(sub)}</text>
-      ${n.kind !== "input" ? `<circle class="port in" data-port-in="${esc(n.id)}" cx="0" cy="${NODE_H / 2}" r="7"/>` : ""}
+      ${!["input", "app", "receive"].includes(n.kind) ? `<circle class="port in" data-port-in="${esc(n.id)}" cx="0" cy="${NODE_H / 2}" r="7"/>` : ""}
       ${n.kind !== "output" ? `<circle class="port out" data-port-out="${esc(n.id)}" cx="${NODE_W}" cy="${NODE_H / 2}" r="7"/>` : ""}
     </g>`;
   }
@@ -146,13 +167,38 @@ function flPanel() {
         <select id="fl-send-dev" style="width:100%">${outs.map((d) => `<option value="${d.id}"${d.id === n.device ? " selected" : ""}>${esc(`${d.name} (${d.device})`)}</option>`).join("")}</select></div>
         <p class="desc">O som que chega aqui também toca nesse dispositivo, convertido para o formato dele. Fica uns 30 ms atrás do principal.</p>`;
     }
-    if (n.kind === "plugin" || n.kind === "mixer" || n.kind === "send") h += `<button class="pill" id="fl-del-node">Remover caixa</button>`;
+    if (n.kind === "app") {
+      h += `<div class="field"><div class="flabel"><span>Programa (.exe)</span></div>
+        <input type="text" id="fl-app-exe" value="${esc(n.exe || "")}" list="fl-app-list" style="width:100%">
+        <datalist id="fl-app-list">${FL.apps.map((a) => `<option value="${esc(a)}">`).join("")}</datalist></div>
+        <p class="desc">Sugestões: programas tocando som agora. A captura é uma cópia: o programa continua tocando onde estava. Para ouvir só a versão processada, aponte o programa para outra saída nas configurações de som do Windows.</p>`;
+    }
+    if (n.kind === "receive") {
+      const ins = PL.devices.filter((d) => d.kind === "Microfone" && d.id !== PL.device);
+      h += `<div class="field"><div class="flabel"><span>Entrada</span></div>
+        <select id="fl-recv-dev" style="width:100%">${ins.map((d) => `<option value="${d.id}"${d.id === n.device ? " selected" : ""}>${esc(`${d.name} (${d.device})`)}</option>`).join("")}</select></div>`;
+    }
+    if (n.kind === "fx") {
+      const f = FX[n.fx];
+      if (f && f.unit !== undefined) {
+        h += `<div class="field"><div class="flabel"><span>${esc(f.name)}</span><output id="fl-fx-v">${n.value} ${f.unit}</output></div>
+          <input type="range" id="fl-fx-val" min="${f.min}" max="${f.max}" step="${f.step}" value="${n.value}"></div>`;
+      } else if (f) h += `<p class="desc">${esc(f.hint)}</p>`;
+    }
+    if (!["input", "output"].includes(n.kind)) h += `<button class="pill" id="fl-del-node">Remover caixa</button>`;
     if (n.kind === "input" || n.kind === "output") h += `<p class="desc">Esta caixa é fixa.</p>`;
     box.innerHTML = h;
     $("#fl-open")?.addEventListener("click", () => flOpen(n));
     $("#fl-toggle")?.addEventListener("click", () => { const p = PL.chain.plugins[n.plugin]; p.enabled = !p.enabled; flChanged(); });
     $("#fl-del-node")?.addEventListener("click", () => flRemoveNode(n));
     $("#fl-send-dev")?.addEventListener("change", (e) => { n.device = e.target.value; flChanged(); });
+    $("#fl-recv-dev")?.addEventListener("change", (e) => { n.device = e.target.value; flChanged(); });
+    $("#fl-app-exe")?.addEventListener("change", (e) => { n.exe = e.target.value.trim().toLowerCase(); flChanged(); });
+    const fv = $("#fl-fx-val");
+    if (fv) {
+      fillPct(fv);
+      fv.addEventListener("input", () => { n.value = Number(fv.value); $("#fl-fx-v").textContent = `${n.value} ${FX[n.fx].unit}`; fillPct(fv); flSaveSoon(); flRenderEdgesOnly(); });
+    }
   } else {
     box.innerHTML = `<h2>Dicas</h2><p class="desc">Arraste as caixas para organizar. Puxe da bolinha da direita para a da esquerda de outra caixa para ligar. Clique numa seta para mudar o volume dela.</p>
       <p class="desc">Exemplo: ligue o Windows direto na Saída e também num reverb, e o reverb na Saída com 30%. Você ouve o som original com um pouco de reverb.</p>`;
@@ -313,6 +359,25 @@ function flBind() {
     g.nodes.push({ id, kind: "send", device: target.id, x: 440, y: 40 });
     FL.sel = { node: id };
     flChanged();
+  });
+  const addNode = (node) => {
+    const g = graph();
+    g.nodes.push({ x: 40, y: 300, ...node });
+    FL.sel = { node: node.id };
+    flChanged();
+  };
+  $("#fl-app").addEventListener("click", async () => {
+    try { FL.apps = await invoke("audio_apps"); } catch (e) { FL.apps = []; }
+    addNode({ id: `a${Date.now().toString(36)}`, kind: "app", exe: FL.apps[0] || "" });
+  });
+  $("#fl-recv").addEventListener("click", () => {
+    const d = PL.devices.find((x) => x.kind === "Microfone" && x.id !== PL.device);
+    if (!d) { $("#error").textContent = "Não há outra entrada de áudio para receber."; $("#error").hidden = false; return; }
+    addNode({ id: `r${Date.now().toString(36)}`, kind: "receive", device: d.id });
+  });
+  $("#fl-addfx").addEventListener("click", () => {
+    const fx = $("#fl-fx").value;
+    addNode({ id: `f${Date.now().toString(36)}`, kind: "fx", fx, value: FX[fx].def ?? 0, x: 240, y: 300 });
   });
   $("#fl-serial").addEventListener("click", () => {
     PL.chain.graph = serialGraph(PL.chain.plugins.length);

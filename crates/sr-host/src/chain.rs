@@ -105,11 +105,28 @@ pub fn save_states(endpoint: &str, loaded: &[Loaded], log: &dyn Fn(&str)) {
 /// Liga os nós do fluxo aos plugins carregados.
 struct NodeProcs {
     plugins: Vec<Option<Shared>>,
+    blocks: Vec<Option<crate::blocks::Block>>,
+    /// Entradas externas (programa / dispositivo) por nó
+    sources: Vec<Option<sr_bridge::ring::Consumer>>,
     ab: AudioBuffers,
 }
 
 impl crate::graph::Processor for NodeProcs {
     fn process(&mut self, node: usize, l: &mut [f32], r: &mut [f32]) -> bool {
+        if let Some(Some(src)) = self.sources.get(node) {
+            // soma o que chegou do programa/dispositivo (faltou = silêncio neste trecho)
+            for (a, b) in l.iter_mut().zip(r.iter_mut()) {
+                if let Some((x, y)) = src.pop() {
+                    *a += x;
+                    *b += y;
+                }
+            }
+            return true;
+        }
+        if let Some(Some(b)) = self.blocks.get_mut(node) {
+            b.process(l, r);
+            return true;
+        }
         let Some(Some(p)) = self.plugins.get(node) else { return false };
         // janela usando o plugin agora? pula este plugin neste bloco (o som segue)
         let Ok(mut g) = p.try_lock() else { return false };
@@ -149,6 +166,7 @@ impl AudioChain {
         cfg: &ChainConfig,
         sample_rate: f64,
         mut sends: std::collections::HashMap<String, sr_bridge::ring::Producer>,
+        mut sources: std::collections::HashMap<String, sr_bridge::ring::Consumer>,
         log: &dyn Fn(&str),
     ) -> AudioChain {
         let graph = cfg.graph.clone().unwrap_or_else(|| crate::graph::Graph::serial(cfg.plugins.len()));
@@ -167,11 +185,20 @@ impl AudioChain {
                 _ => None,
             })
             .collect();
+        let blocks = graph
+            .nodes
+            .iter()
+            .map(|n| match n.kind {
+                crate::graph::NodeKind::Fx { fx, value } => Some(crate::blocks::Block::new(fx, value, sample_rate)),
+                _ => None,
+            })
+            .collect();
+        let sources = graph.nodes.iter().map(|n| sources.remove(&n.id)).collect();
         let mut ab = AudioBuffers::new(2, 2, MAX_FRAMES, sample_rate);
         ab.block_size = 0;
         let bufs = (0..graph.nodes.len()).map(|_| [Vec::with_capacity(MAX_FRAMES), Vec::with_capacity(MAX_FRAMES)]).collect();
         let sends = graph.nodes.iter().enumerate().filter_map(|(i, n)| sends.remove(&n.id).map(|p| (i, p))).collect();
-        AudioChain { sends, plan, procs: NodeProcs { plugins, ab }, bufs, sample_rate }
+        AudioChain { sends, plan, procs: NodeProcs { plugins, blocks, sources, ab }, bufs, sample_rate }
     }
 
     pub fn sample_rate(&self) -> f64 {

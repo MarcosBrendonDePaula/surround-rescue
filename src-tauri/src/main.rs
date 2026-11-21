@@ -158,6 +158,11 @@ fn scan_plugins() -> Result<Vec<plugins::Found>, String> {
 }
 
 #[tauri::command]
+fn audio_apps() -> Result<Vec<String>, String> {
+    plugins::audio_apps()
+}
+
+#[tauri::command]
 fn get_chain(endpoint: String) -> Result<plugins::Chain, String> {
     plugins::get_chain(&endpoint)
 }
@@ -219,7 +224,7 @@ fn main() {
         .plugin(tauri_plugin_single_instance::init(|app, _, _| show(app)))
         .manage(state)
         .manage(plugins::HostProcess(Mutex::new(None)))
-        .invoke_handler(tauri::generate_handler![get_snapshot, set_config, get_status, set_device_engine, set_autostart, preview, recent_apps, scan_plugins, get_chain, set_chain, host_status, open_plugin_window])
+        .invoke_handler(tauri::generate_handler![get_snapshot, set_config, get_status, set_device_engine, set_autostart, preview, recent_apps, scan_plugins, get_chain, set_chain, host_status, open_plugin_window, audio_apps])
         .setup(|app| {
             let show_i = MenuItem::with_id(app, "show", "Abrir", true, None::<&str>)?;
             let toggle_i = MenuItem::with_id(app, "toggle", "Ligar/Desligar surround", true, None::<&str>)?;

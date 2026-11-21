@@ -15,7 +15,17 @@
 pub mod channels;
 pub mod ring;
 
-use rubato::{Resampler, SincFixedOut, SincInterpolationParameters, SincInterpolationType, WindowFunction};
+use rubato::{Resampler, SincFixedIn, SincFixedOut, SincInterpolationParameters, SincInterpolationType, WindowFunction};
+
+fn sinc_params() -> SincInterpolationParameters {
+    SincInterpolationParameters {
+        sinc_len: 128,
+        f_cutoff: 0.95,
+        interpolation: SincInterpolationType::Cubic,
+        oversampling_factor: 128,
+        window: WindowFunction::BlackmanHarris2,
+    }
+}
 
 /// Nível de buffer que a ponte tenta manter (em ms): margem contra soluços do Windows.
 pub const TARGET_MS: f64 = 30.0;
@@ -80,15 +90,8 @@ const CHUNK: usize = 256;
 impl Output {
     /// `src_rate` = taxa do fluxo; `dst_rate` = taxa do dispositivo.
     pub fn new(queue: ring::Consumer, src_rate: u32, dst_rate: u32) -> Output {
-        let params = SincInterpolationParameters {
-            sinc_len: 128,
-            f_cutoff: 0.95,
-            interpolation: SincInterpolationType::Cubic,
-            oversampling_factor: 128,
-            window: WindowFunction::BlackmanHarris2,
-        };
         let base_ratio = dst_rate as f64 / src_rate as f64;
-        let resampler = SincFixedOut::<f32>::new(base_ratio, 1.0 + 2.0 * MAX_ADJUST, params, CHUNK, 2).expect("resampler");
+        let resampler = SincFixedOut::<f32>::new(base_ratio, 1.0 + 2.0 * MAX_ADJUST, sinc_params(), CHUNK, 2).expect("resampler");
         let max_in = resampler.input_frames_max();
         Output {
             drift: Drift::new(TARGET_MS / 1000.0 * src_rate as f64),
@@ -160,6 +163,70 @@ impl Output {
         }
         self.pos = 0;
         produced > 0
+    }
+}
+
+/// Lado de entrada da ponte: recebe do dispositivo/programa (na taxa dele, qualquer nº de
+/// canais) e coloca na fila já na taxa do fluxo. O fluxo lê com [`ring::Consumer::pop`].
+/// O relógio é acompanhado pelo nível da fila: sobrando → produz um pouco menos.
+pub struct Input {
+    queue: ring::Producer,
+    resampler: SincFixedIn<f32>,
+    drift: Drift,
+    acc: [Vec<f32>; 2],
+    out_buf: Vec<Vec<f32>>,
+    base_ratio: f64,
+    pub overflows: u64,
+}
+
+impl Input {
+    /// `src_rate` = taxa do dispositivo/programa; `dst_rate` = taxa do fluxo.
+    pub fn new(queue: ring::Producer, src_rate: u32, dst_rate: u32) -> Input {
+        let base_ratio = dst_rate as f64 / src_rate as f64;
+        let resampler = SincFixedIn::<f32>::new(base_ratio, 1.0 + 2.0 * MAX_ADJUST, sinc_params(), CHUNK, 2).expect("resampler");
+        Input {
+            drift: Drift::new(TARGET_MS / 1000.0 * dst_rate as f64),
+            out_buf: resampler.output_buffer_allocate(true),
+            resampler,
+            queue,
+            acc: [Vec::with_capacity(CHUNK * 4), Vec::with_capacity(CHUNK * 4)],
+            base_ratio,
+            overflows: 0,
+        }
+    }
+
+    pub fn ratio(&self) -> f64 {
+        self.drift.ratio * self.base_ratio
+    }
+
+    pub fn queued(&self) -> usize {
+        self.queue.len()
+    }
+
+    /// Recebe quadros intercalados com `channels` canais (convertidos para estéreo aqui).
+    pub fn push(&mut self, frames: &[f32], channels: usize) {
+        let ch = channels.max(1);
+        for f in frames.chunks_exact(ch) {
+            let (l, r) = channels::to_stereo(f);
+            self.acc[0].push(l);
+            self.acc[1].push(r);
+        }
+        while self.acc[0].len() >= CHUNK {
+            let rel = self.drift.update(self.queue.len() as f64);
+            let _ = self.resampler.set_resample_ratio_relative(rel, true);
+            let ins = [&self.acc[0][..CHUNK], &self.acc[1][..CHUNK]];
+            if let Ok((_, produced)) = self.resampler.process_into_buffer(&ins, &mut self.out_buf, None) {
+                for k in 0..produced {
+                    if !self.queue.push(self.out_buf[0][k], self.out_buf[1][k]) {
+                        self.overflows += 1;
+                        break;
+                    }
+                }
+            }
+            for c in &mut self.acc {
+                c.drain(..CHUNK);
+            }
+        }
     }
 }
 
@@ -255,6 +322,46 @@ mod tests {
             }
         }
         assert!(worst < 0.0005, "correção vibrou {:.4}%", worst * 100.0);
+    }
+
+    /// Programa tocando a 44,1 kHz (relógio 80 ppm diferente) entrando num fluxo de 48 kHz
+    /// que consome blocos de 10 ms: 10 minutos sem faltar nem sobrar.
+    #[test]
+    fn input_from_44k1_app_into_48k_flow_stays_in_sync() {
+        let (prod, cons) = ring::channel(48000);
+        let mut inp = Input::new(prod, 44100, 48000);
+        let real_src = 44100.0 * (1.0 + 80e-6);
+        let (mut acc, mut phase) = (0.0f64, 0.0f64);
+        let (mut missing, mut lo, mut hi) = (0u64, usize::MAX, 0usize);
+        for step in 0..60_000 {
+            // o programa entrega ~10 ms
+            acc += real_src / 100.0;
+            let n = acc as usize;
+            acc -= n as f64;
+            let frames: Vec<f32> = (0..n)
+                .flat_map(|_| {
+                    let v = (phase * std::f64::consts::TAU).sin() as f32 * 0.5;
+                    phase = (phase + 1000.0 / 44100.0) % 1.0;
+                    [v, v]
+                })
+                .collect();
+            inp.push(&frames, 2);
+            // o fluxo consome um bloco de 10 ms a 48 kHz (depois de encher o alvo)
+            if step > 5 {
+                for _ in 0..480 {
+                    if cons.pop().is_none() {
+                        missing += 1;
+                    }
+                }
+            }
+            if step > 2000 {
+                lo = lo.min(cons.len());
+                hi = hi.max(cons.len());
+            }
+        }
+        assert_eq!(inp.overflows, 0);
+        assert_eq!(missing, 0, "faltou som");
+        assert!(lo > 100 && hi < 6000, "fila fugiu: {lo}..{hi}");
     }
 
     #[test]

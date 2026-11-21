@@ -20,7 +20,8 @@ fn main() -> Result<()> {
         let total = client.GetBufferSize()?;
         client.Start()?;
         let mut t = 0u64;
-        let end = sr as u64 * 2;
+        let secs: u64 = std::env::args().nth(2).and_then(|s| s.parse().ok()).unwrap_or(2);
+        let end = sr as u64 * secs;
         while t < end {
             let free = total - client.GetCurrentPadding()?;
             if free > 0 {

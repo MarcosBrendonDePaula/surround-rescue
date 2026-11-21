@@ -14,6 +14,8 @@
 mod chain;
 mod graph;
 mod send;
+mod blocks;
+mod capture;
 
 use chain::{chains_dir, root_dir, AudioChain, ChainConfig, Loaded};
 use std::collections::HashMap;
@@ -55,6 +57,8 @@ struct Device {
     windows: HashMap<usize, PluginWindow>,
     /// Envios para outros dispositivos (mantêm as threads de saída vivas)
     senders: Vec<send::Sender>,
+    /// Capturas de programas/dispositivos (mantêm as threads de entrada vivas)
+    captures: Vec<capture::Capture>,
     slot: Slot,
     stop: Arc<AtomicBool>,
 }
@@ -71,6 +75,7 @@ impl Device {
             loaded_sr: 0,
             windows: HashMap::new(),
             senders: vec![],
+            captures: vec![],
             slot: Arc::new(Mutex::new(None)),
             stop: Arc::new(AtomicBool::new(false)),
         }
@@ -120,7 +125,24 @@ impl Device {
                 }
             }
         }
-        *self.slot.lock().unwrap() = Some(AudioChain::new(&self.loaded, &self.cfg, sr as f64, producers, &log));
+        // entradas externas: programas e outros dispositivos
+        self.captures.clear();
+        let mut consumers = HashMap::new();
+        if let Some(g) = &self.cfg.graph {
+            for n in &g.nodes {
+                let src = match &n.kind {
+                    graph::NodeKind::App { exe } => Some(capture::Source::App(exe.clone())),
+                    graph::NodeKind::Receive { device } if device.to_lowercase() != self.endpoint => Some(capture::Source::Device(device.clone())),
+                    _ => None,
+                };
+                if let Some(src) = src {
+                    let (cons, c) = capture::Capture::start(src, sr, log);
+                    consumers.insert(n.id.clone(), cons);
+                    self.captures.push(c);
+                }
+            }
+        }
+        *self.slot.lock().unwrap() = Some(AudioChain::new(&self.loaded, &self.cfg, sr as f64, producers, consumers, &log));
     }
 
     /// Ciclo lento (1 s): canal, mudanças no arquivo e na taxa.
@@ -322,7 +344,7 @@ fn test_plugin(path: &str) {
         std::process::exit(1);
     }
     let editor = loaded[0].plugin.lock().map(|p| p.has_editor()).unwrap_or(false);
-    let mut c = AudioChain::new(&loaded, &cfg, 48000.0, HashMap::new(), &|m| println!("{m}"));
+    let mut c = AudioChain::new(&loaded, &cfg, 48000.0, HashMap::new(), HashMap::new(), &|m| println!("{m}"));
     let mut audio: Vec<f32> = (0..48000 * 2).map(|i| ((i / 2) as f32 * 2.0 * std::f32::consts::PI * 440.0 / 48000.0).sin() * 0.5).collect();
     let orig = audio.clone();
     let t0 = Instant::now();
@@ -339,9 +361,34 @@ fn test_plugin(path: &str) {
     );
 }
 
+/// Diagnóstico: captura o som de um programa por alguns segundos e mede o que chegou ao fluxo.
+fn test_capture(exe: &str, secs: u64) {
+    let (cons, cap) = capture::Capture::start(capture::Source::App(exe.into()), 48000, |m| println!("{m}"));
+    let t0 = Instant::now();
+    let (mut n, mut sum, mut peak, mut zc, mut last) = (0u64, 0.0f64, 0.0f32, 0u64, 0.0f32);
+    while t0.elapsed() < Duration::from_secs(secs) {
+        while let Some((l, _)) = cons.pop() {
+            n += 1;
+            sum += (l * l) as f64;
+            peak = peak.max(l.abs());
+            if (l < 0.0) != (last < 0.0) {
+                zc += 1;
+            }
+            last = l;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    drop(cap);
+    let rms = if n > 0 { (sum / n as f64).sqrt() } else { 0.0 };
+    let freq = zc as f64 / 2.0 / (n.max(1) as f64 / 48000.0);
+    println!("capturado: {:.2} s de áudio a 48 kHz | nível RMS {rms:.4} | pico {peak:.3} | frequência ≈ {freq:.0} Hz", n as f64 / 48000.0);
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     match args.get(1).map(|s| s.as_str()) {
+        Some("--apps") => return println!("{}", serde_json::to_string(&capture::audio_apps()).unwrap()),
+        Some("--capture") => return test_capture(args.get(2).expect("informe o .exe"), args.get(3).and_then(|s| s.parse().ok()).unwrap_or(5)),
         Some("--scan") => scan(),
         Some("--test") => test_plugin(args.get(2).expect("informe o caminho do .vst3")),
         _ => run(),
