@@ -15,6 +15,8 @@ use winreg::{RegKey, RegValue};
 
 pub const CLSID: &str = "{5A3E1F0C-6B2D-4C8E-9F17-53A2D0B7E4C1}";
 const FX: &str = "{d04e05a6-594b-4fb6-a80d-01af5eed7d1d}";
+/// PKEY_AudioEndpoint_Disable_SysFx: 1 = "melhorias de áudio" desligadas no dispositivo
+const SYSFX_OFF: &str = "{1da5d803-d492-4edd-8c23-e0c0ffee7f0e},5";
 const DLL_DIR: &str = r"C:\Program Files\SurroundRescue\apo";
 
 fn engine_dir() -> PathBuf {
@@ -77,6 +79,10 @@ fn set_one(flow: &str, id: &str) -> Result<(), String> {
     let k = hklm
         .open_subkey_with_flags(fx_path(flow, id), KEY_QUERY_VALUE | KEY_SET_VALUE)
         .map_err(|e| format!("{id}: sem acesso ao dispositivo ({e})"))?;
+    // "melhorias de áudio" desligadas no Windows = nenhum efeito roda, inclusive o nosso: religa
+    if k.get_value::<u32, _>(SYSFX_OFF).map(|v| v != 0).unwrap_or(false) {
+        k.set_value(SYSFX_OFF, &0u32).map_err(|e| format!("{id}: não religou as melhorias de áudio ({e})"))?;
+    }
     let key = target_key(flow, id).ok_or_else(|| format!("{id}: sem acesso ao dispositivo"))?;
     let multi = key.ends_with(",15");
     let has_ours = |name: &str| k.get_raw_value(name).map(|v| v.to_string().to_uppercase().contains(&CLSID[1..37])).unwrap_or(false);
