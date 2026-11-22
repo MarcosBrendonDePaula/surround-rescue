@@ -538,7 +538,7 @@ function upBind() {
     if (!UP?.latest) return;
     $("#up-install").disabled = true;
     $("#up-msg").textContent = `Baixando a versão ${UP.latest}… o app fecha, instala (aceite o pedido de administrador) e abre de novo.`;
-    try { await invoke("install_update", { version: UP.latest }); }
+    try { await invoke("install_update"); }
     catch (e) { $("#up-msg").textContent = `Não deu para atualizar: ${e}`; $("#up-install").disabled = false; }
   });
   upCheck(true);

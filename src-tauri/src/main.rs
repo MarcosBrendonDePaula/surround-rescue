@@ -274,20 +274,20 @@ fn plugin_env() -> serde_json::Value {
 
 #[tauri::command]
 async fn check_update(app: AppHandle) -> Result<update::Check, String> {
-    let cur = app.package_info().version.to_string();
-    tauri::async_runtime::spawn_blocking(move || update::check(cur)).await.map_err(|e| e.to_string())
+    Ok(update::check(&app).await)
 }
 
-/// Baixa e instala a versão nova; o app fecha (e o executor junto) e volta já atualizado.
+/// Baixa, confere a assinatura e instala a versão nova pelo atualizador do Tauri; o app reabre sozinho.
 #[tauri::command]
-async fn install_update(app: AppHandle, version: String, host: State<'_, plugins::HostProcess>) -> Result<(), String> {
-    let v = version.clone();
-    tauri::async_runtime::spawn_blocking(move || update::download_and_run(&v)).await.map_err(|e| e.to_string())??;
-    if let Some(mut c) = host.0.lock().unwrap().take() {
-        let _ = c.kill();
-    }
-    app.exit(0);
-    Ok(())
+async fn install_update(app: AppHandle, host: State<'_, plugins::HostProcess>) -> Result<(), String> {
+    // o executor segura arquivos do app: fecha antes de instalar
+    let stop_host = || {
+        if let Some(mut c) = host.0.lock().unwrap().take() {
+            let _ = c.kill();
+        }
+    };
+    update::install(&app, stop_host).await?;
+    app.restart();
 }
 
 #[tauri::command]
@@ -375,6 +375,8 @@ fn main() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _, _| show(app)))
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .manage(state)
         .manage(plugins::HostProcess(Mutex::new(None)))
         .invoke_handler(tauri::generate_handler![run_diagnostics, diagnose_test, diagnose_mic_test, engine_outdated, report_issue, engine_test, get_snapshot, set_config, get_status, set_device_engine, set_autostart, preview, recent_apps, scan_plugins, get_chain, set_chain, host_status, open_plugin_window, audio_apps, list_flows, get_flow, set_flow, delete_flow, get_stats, plugin_env, engine_devices, set_engine, get_levels, check_update, install_update])

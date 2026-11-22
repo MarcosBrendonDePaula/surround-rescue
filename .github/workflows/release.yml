@@ -78,7 +78,10 @@ jobs:
           cargo build --release -p sr-apo
           cargo build --release -p sr-bridge32 --target i686-pc-windows-msvc
 
-      - name: Compilar o app e gerar o instalador
+      - name: Compilar o app e gerar o instalador (assinado para o atualizador)
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: npx tauri build
 
       - name: Publicar a release
@@ -94,12 +97,27 @@ jobs:
           $asset = "SurroundRescue-$v-setup.exe"
           Copy-Item $src.FullName $asset
           $sha = (Get-FileHash $asset -Algorithm SHA256).Hash.ToLower()
+          # atualizador do Tauri: assinatura do instalador + latest.json (o app lê releases/latest/download/latest.json)
+          $sig = Get-Content "$($src.FullName).sig" -Raw
+          if (-not $sig) { throw "assinatura do instalador não encontrada (segredo TAURI_SIGNING_PRIVATE_KEY?)" }
+          $latest = [ordered]@{
+            version = $v
+            notes = (Get-Content notes.txt -Raw).Trim()
+            pub_date = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+            platforms = [ordered]@{
+              "windows-x86_64" = [ordered]@{
+                signature = $sig.Trim()
+                url = "https://github.com/${{ github.repository }}/releases/download/$tag/$asset"
+              }
+            }
+          }
+          [System.IO.File]::WriteAllText("latest.json", ($latest | ConvertTo-Json -Depth 5), (New-Object System.Text.UTF8Encoding $false))
           gh release view $tag *> $null
-          if ($LASTEXITCODE -eq 0) { gh release upload $tag $asset --clobber } else { gh release create $tag $asset --title "Surround Rescue $v" --notes-file notes.txt }
+          if ($LASTEXITCODE -eq 0) { gh release upload $tag $asset latest.json --clobber } else { gh release create $tag $asset latest.json --title "Surround Rescue $v" --notes-file notes.txt }
           "sha=$sha" >> $env:GITHUB_OUTPUT
           "asset=$asset" >> $env:GITHUB_OUTPUT
 
-      # só agora (com o instalador publicado) os apps ficam sabendo da versão nova
+      # version.json: ainda lido pelos apps até a 0.6.6 (atualizador antigo)
       - name: Atualizar o version.json na main
         shell: pwsh
         run: |
