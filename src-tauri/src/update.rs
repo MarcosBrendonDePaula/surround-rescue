@@ -101,21 +101,43 @@ pub fn download_and_run(version: &str) -> Result<(), String> {
     std::fs::write(&setup, &body).map_err(|e| e.to_string())?;
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let pid = std::process::id();
-    let script = format!(
-        "Wait-Process -Id {pid} -ErrorAction SilentlyContinue; \
-         Start-Process -FilePath '{}' -ArgumentList '/S' -Verb RunAs -Wait; \
-         Start-Process -FilePath '{}'",
-        setup.display(),
-        exe.display()
-    );
+    // ajudante em arquivo, com registro de cada passo (antes era um comando escondido que morria junto
+    // com o app ao fechar, e ninguém via)
+    let log = dir.join("update.log");
+    let script = dir.join("update.ps1");
+    let q = |p: &std::path::Path| p.display().to_string().replace('\'', "''");
+    let lines = [
+        format!("$log = '{}'", q(&log)),
+        r#"function L($m) { Add-Content -Path $log -Value ("$(Get-Date -Format 'HH:mm:ss') " + $m) }"#.to_string(),
+        format!("Set-Content -Path $log -Value 'atualizando para {version}'"),
+        format!("try {{ Wait-Process -Id {pid} -Timeout 60 -ErrorAction SilentlyContinue }} catch {{}}"),
+        "L 'app fechou'".to_string(),
+        "try {".to_string(),
+        format!("  $p = Start-Process -FilePath '{}' -ArgumentList '/S' -Verb RunAs -Wait -PassThru", q(&setup)),
+        r#"  L ("instalador terminou: " + $p.ExitCode)"#.to_string(),
+        r#"} catch { L ("instalador nao rodou: " + $_) }"#.to_string(),
+        "Start-Sleep -Seconds 1".to_string(),
+        format!(r#"try {{ Start-Process -FilePath '{}'; L 'app reaberto' }} catch {{ L ("nao reabriu: " + $_) }}"#, q(&exe)),
+    ];
+    std::fs::write(&script, lines.join("\r\n")).map_err(|e| e.to_string())?;
     use std::os::windows::process::CommandExt;
-    std::process::Command::new("powershell")
-        .args(["-NoProfile", "-WindowStyle", "Hidden", "-Command", &script])
-        .creation_flags(0x0800_0000 | 0x0000_0008) // sem janela, desanexado
-        .spawn()
-        .map_err(|e| e.to_string())?;
+    const NO_WINDOW: u32 = 0x0800_0000;
+    const DETACHED: u32 = 0x0000_0008;
+    const NEW_GROUP: u32 = 0x0000_0200;
+    const BREAKAWAY: u32 = 0x0100_0000; // sai do grupo de processos do app: não morre quando o app fecha
+    let script_s = script.display().to_string();
+    let spawn = |flags: u32| {
+        std::process::Command::new("powershell")
+            .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden", "-File", &script_s])
+            .creation_flags(flags)
+            .spawn()
+    };
+    spawn(NO_WINDOW | DETACHED | NEW_GROUP | BREAKAWAY)
+        .or_else(|_| spawn(NO_WINDOW | DETACHED | NEW_GROUP))
+        .map_err(|e| format!("não iniciou o atualizador: {e}"))?;
     Ok(())
 }
+
 
 #[cfg(test)]
 mod tests {
