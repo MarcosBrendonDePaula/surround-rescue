@@ -126,6 +126,12 @@ impl Drop for Engine {
     }
 }
 
+/// Dispositivos cujo canal com o executor já tem dono neste processo.
+fn channel_owners() -> &'static Mutex<std::collections::HashSet<String>> {
+    static S: std::sync::OnceLock<Mutex<std::collections::HashSet<String>>> = std::sync::OnceLock::new();
+    S.get_or_init(|| Mutex::new(Default::default()))
+}
+
 /// Thread comum: confere o arquivo 4x por segundo e manda a configuração nova.
 fn watch(path: std::path::PathBuf, endpoint: String, mb: Arc<Mailbox>, info: String) {
     let status = config::engine_dir().join(format!("status-{}.txt", endpoint.to_lowercase()));
@@ -133,12 +139,20 @@ fn watch(path: std::path::PathBuf, endpoint: String, mb: Arc<Mailbox>, info: Str
     let mut last: Option<SystemTime> = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
     // O APO (serviço) cria o canal; o executor de VST conecta quando quiser.
     // Enquanto não houver executor vivo, o tempo real nem espera (batimento ausente).
-    match sr_ipc::Channel::create(&endpoint) {
-        Ok(c) => {
-            crate::log(&format!("canal para VSTs criado em {endpoint}"));
-            *mb.host.lock().unwrap() = Some(c);
+    // o Windows abre várias cópias do motor no mesmo dispositivo (uma por programa/modo, no microfone);
+    // todas usariam o mesmo canal ao mesmo tempo. Só a primeira fica com ele; as outras processam sem.
+    let owner = {
+        let mut set = channel_owners().lock().unwrap();
+        set.insert(endpoint.to_lowercase())
+    };
+    if owner {
+        match sr_ipc::Channel::create(&endpoint) {
+            Ok(c) => {
+                crate::log(&format!("canal para VSTs criado em {endpoint}"));
+                *mb.host.lock().unwrap() = Some(c);
+            }
+            Err(e) => crate::log(&format!("canal para VSTs falhou em {endpoint}: {e}")),
         }
-        Err(e) => crate::log(&format!("canal para VSTs falhou em {endpoint}: {e}")),
     }
     while !mb.stop.load(Ordering::SeqCst) {
         std::thread::sleep(Duration::from_millis(250));
@@ -160,5 +174,10 @@ fn watch(path: std::path::PathBuf, endpoint: String, mb: Arc<Mailbox>, info: Str
                 *mb.pending.lock().unwrap() = Some(c);
             }
         }
+    }
+    // esta cópia acabou: outra pode assumir o canal
+    if owner {
+        *mb.host.lock().unwrap() = None;
+        channel_owners().lock().unwrap().remove(&endpoint.to_lowercase());
     }
 }

@@ -186,11 +186,15 @@ struct Core {
     rt: UnsafeCell<Option<Engine>>,
     /// Formato das amostras e buffer float de trabalho (criado no Lock, fora do tempo real)
     fmt: UnsafeCell<(Sample, Vec<f32>)>,
+    /// Bytes por quadro (todas as amostras de um instante), para copiar entrada → saída sem processar
+    frame_bytes: std::sync::atomic::AtomicUsize,
+    /// Já avisou no log que o Windows usa buffers separados
+    told_split: AtomicBool,
 }
 
 impl Core {
     fn new() -> Core {
-        Core { setup: Mutex::new(Setup::default()), locked: AtomicBool::new(false), rt: UnsafeCell::new(None), fmt: UnsafeCell::new((Sample::F32, vec![])) }
+        Core { setup: Mutex::new(Setup::default()), locked: AtomicBool::new(false), rt: UnsafeCell::new(None), fmt: UnsafeCell::new((Sample::F32, vec![])), frame_bytes: std::sync::atomic::AtomicUsize::new(0), told_split: AtomicBool::new(false) }
     }
 
     fn initialize(&self, size: u32, data: *const u8) -> HRESULT {
@@ -226,6 +230,9 @@ impl Core {
         log(&format!("LockForProcess taxa={sr} canais={ch} amostra={kind:?} dispositivo={:?}", setup.endpoint));
         // buffer de trabalho para o maior bloco que o Windows pode mandar
         let max = input.u32MaxFrameCount.max(4096) as usize * ch;
+        let mut uf = UNCOMPRESSEDAUDIOFORMAT::default();
+        let fb = if unsafe { fmt.GetUncompressedAudioFormat(&mut uf) }.is_ok() { (uf.dwBytesPerSampleContainer * uf.dwSamplesPerFrame) as usize } else { 0 };
+        self.frame_bytes.store(fb, Ordering::SeqCst);
         unsafe { *self.fmt.get() = (kind, vec![0.0; max]) };
         let engine = Engine::new(sr, ch, setup.endpoint.clone(), false);
         unsafe { *self.rt.get() = Some(engine) };
@@ -249,17 +256,30 @@ impl Core {
         let output = unsafe { &mut **outs };
         output.u32ValidFrameCount = input.u32ValidFrameCount;
         output.u32BufferFlags = input.u32BufferFlags;
+        // quando não processa, a saída recebe a entrada: com buffers separados, sair sem escrever deixava
+        // na saída o bloco anterior (som repetido = voz robótica)
+        let split = output.pBuffer != 0 && input.pBuffer != 0 && output.pBuffer != input.pBuffer;
+        let pass = || {
+            let fb = self.frame_bytes.load(Ordering::Relaxed);
+            if split && fb > 0 {
+                unsafe { std::ptr::copy_nonoverlapping(input.pBuffer as *const u8, output.pBuffer as *mut u8, input.u32ValidFrameCount as usize * fb) };
+            }
+        };
+        if split && !self.told_split.swap(true, Ordering::Relaxed) {
+            log("APOProcess: o Windows usa buffers separados de entrada e saída neste efeito");
+        }
         if input.u32BufferFlags != BUFFER_VALID || input.pBuffer == 0 {
+            pass();
             return;
         }
-        let Some(engine) = (unsafe { &mut *self.rt.get() }) else { return };
+        let Some(engine) = (unsafe { &mut *self.rt.get() }) else { return pass() };
         let len = input.u32ValidFrameCount as usize * engine.channels();
         let (kind, scratch) = unsafe { &mut *self.fmt.get() };
         if *kind == Sample::Passthrough {
-            return; // formato desconhecido: o Windows copia entrada → saída (in-place)
+            return pass(); // formato desconhecido: entrada → saída sem tocar
         }
         if len > scratch.len() {
-            return; // bloco maior que o previsto: passa direto (nunca alocar aqui)
+            return pass(); // bloco maior que o previsto: passa direto (nunca alocar aqui)
         }
         let buf = &mut scratch[..len];
         to_float(input.pBuffer as *const u8, *kind, buf);
