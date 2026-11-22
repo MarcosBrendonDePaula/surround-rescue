@@ -173,6 +173,11 @@ pub fn run_checks(own_engine: bool, out_choice: Option<&str>, in_choice: Option<
         if ours.is_empty() {
             v.push(ck(if own_engine { "fail" } else { "warn" }, t("o motor não está instalado aqui", "the engine is not installed here"), scheme.clone(),
                 tr(en, "Em Configurações → Motor nos dispositivos, clique em Instalar neste dispositivo.", "In Settings → Engine on devices, click Install on this device.")));
+        } else if !crate::engine::in_right_slot(flow, &d.id) {
+            v.push(ck("fail", t("o motor está numa posição que este driver ignora", "the engine is in a slot this driver ignores"),
+                format!("{} · {scheme}", ours.iter().map(|k| slot(k)).collect::<Vec<_>>().join(", ")),
+                tr(en, "Em Configurações → Motor nos dispositivos, clique em Instalar neste dispositivo: o app move o motor para a posição certa.",
+                   "In Settings → Engine on devices, click Install on this device: the app moves the engine to the right slot.")));
         } else {
             v.push(ck("ok", t("motor instalado no caminho do som", "engine installed in the sound path"),
                 format!("{} · {scheme}", ours.iter().map(|k| slot(k)).collect::<Vec<_>>().join(", ")), String::new()));

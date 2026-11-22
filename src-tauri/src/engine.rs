@@ -77,12 +77,17 @@ fn set_one(flow: &str, id: &str) -> Result<(), String> {
     let k = hklm
         .open_subkey_with_flags(fx_path(flow, id), KEY_QUERY_VALUE | KEY_SET_VALUE)
         .map_err(|e| format!("{id}: sem acesso ao dispositivo ({e})"))?;
-    if installed_on(flow, id) {
+    let key = target_key(flow, id).ok_or_else(|| format!("{id}: sem acesso ao dispositivo"))?;
+    let multi = key.ends_with(",15");
+    let has_ours = |name: &str| k.get_raw_value(name).map(|v| v.to_string().to_uppercase().contains(&CLSID[1..37])).unwrap_or(false);
+    if has_ours(&key) {
         return Ok(());
     }
-    let efx = format!("{FX},15");
-    let modern = k.get_raw_value(&efx).is_ok() || k.get_raw_value(format!("{FX},13")).is_ok() || k.get_raw_value(format!("{FX},14")).is_ok();
-    let (key, multi) = if modern { (efx, true) } else if flow == "Capture" { (format!("{FX},1"), false) } else { (format!("{FX},2"), false) };
+    // instalado antes numa posição que este driver ignora (versões até a 0.6.2 não conheciam o esquema
+    // SFX/MFX/EFX): desfaz pelo backup e instala na posição certa
+    if installed_on(flow, id) {
+        restore_one(id)?;
+    }
     let cur: Option<RegValue> = k.get_raw_value(&key).ok();
     let (existed, value, kind) = match &cur {
         None => (false, vec![], if multi { "MultiString" } else { "String" }),
@@ -98,9 +103,42 @@ fn set_one(flow: &str, id: &str) -> Result<(), String> {
         let mut list: Vec<String> = value.into_iter().filter(|v| !v.is_empty() && !v.eq_ignore_ascii_case(CLSID)).collect();
         list.push(CLSID.into());
         k.set_value(&key, &list).map_err(|e| e.to_string())
+    } else if kind == "MultiString" {
+        // posição única gravada como lista pelo driver: mantém o tipo
+        k.set_value(&key, &vec![CLSID.to_string()]).map_err(|e| e.to_string())
     } else {
         k.set_value(&key, &CLSID.to_string()).map_err(|e| e.to_string())
     }
+}
+
+/// Posição certa do motor neste dispositivo, conforme o esquema de efeitos que o driver usa.
+/// O Windows só lê UM esquema por dispositivo: com as posições novas (13/14/15) ignora as outras;
+/// com as intermediárias (SFX 5 / MFX 6 / EFX 7) ignora as antigas (LFX 1 / GFX 2).
+pub fn target_key(flow: &str, id: &str) -> Option<String> {
+    let k = RegKey::predef(HKEY_LOCAL_MACHINE).open_subkey_with_flags(fx_path(flow, id), KEY_QUERY_VALUE).ok()?;
+    let has = |n: u32| k.get_raw_value(format!("{FX},{n}")).is_ok();
+    let n = if has(13) || has(14) || has(15) {
+        15
+    } else if has(5) || has(6) || has(7) {
+        // microfone: SFX (o som de entrada). Saída: MFX (depois da mistura), que o driver já declara e o
+        // Windows com certeza carrega; EFX só se o driver não tiver MFX
+        if flow == "Capture" { 5 } else if has(6) || !has(7) { 6 } else { 7 }
+    } else if flow == "Capture" {
+        1
+    } else {
+        2
+    };
+    Some(format!("{FX},{n}"))
+}
+
+/// O motor está na posição que o driver deste dispositivo realmente lê?
+pub fn in_right_slot(flow: &str, id: &str) -> bool {
+    let Some(key) = target_key(flow, id) else { return false };
+    RegKey::predef(HKEY_LOCAL_MACHINE)
+        .open_subkey_with_flags(fx_path(flow, id), KEY_QUERY_VALUE)
+        .and_then(|k| k.get_raw_value(&key))
+        .map(|v| v.to_string().to_uppercase().contains(&CLSID[1..37]))
+        .unwrap_or(false)
 }
 
 fn restore_one(id: &str) -> Result<(), String> {
@@ -213,7 +251,7 @@ pub fn list() -> Vec<DevEngine> {
     ["Render", "Capture"]
         .iter()
         .flat_map(|f| crate::devices::list(f))
-        .map(|d| DevEngine { engine: installed_on(&d.flow, &d.id), id: d.id, flow: d.flow, name: d.name, device: d.device, connected: d.connected })
+        .map(|d| DevEngine { engine: in_right_slot(&d.flow, &d.id), id: d.id, flow: d.flow, name: d.name, device: d.device, connected: d.connected })
         .collect()
 }
 
@@ -230,6 +268,16 @@ pub fn apply_elevated(on: bool, items: &[(String, String)]) -> Result<(), String
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Mostra, só lendo, em que posição o motor iria em cada saída deste PC
+    /// (cargo test -- --ignored --nocapture posicoes_deste_pc)
+    #[test]
+    #[ignore]
+    fn posicoes_deste_pc() {
+        for d in crate::devices::list("Render").iter().chain(crate::devices::list("Capture").iter()) {
+            println!("{} {} -> {:?} (certa agora: {})", d.flow, d.device, target_key(&d.flow, &d.id), in_right_slot(&d.flow, &d.id));
+        }
+    }
 
     #[test]
     fn le_backup_dos_scripts() {
