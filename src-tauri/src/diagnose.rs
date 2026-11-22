@@ -266,6 +266,7 @@ mod tests {
         for c in super::run_checks(true, None, None, "pt") {
             println!("[{}] {} | {} | {}", c.level, c.title, c.detail, c.fix);
         }
+        println!("{}", super::device_map());
     }
 }
 
@@ -279,4 +280,134 @@ mod teste_ativo {
         let c = super::active_test(&d.id, "pt");
         println!("[{}] {} | {} | {}", c.level, c.title, c.detail, c.fix);
     }
+}
+
+/// Nome curto de um modo de processamento do Windows (os que o driver declara suportar).
+fn mode_name(g: &str) -> Option<&'static str> {
+    Some(match g.to_uppercase().as_str() {
+        "{C18E2F7E-933D-4965-B7D1-1EEF228D2AF3}" => "default",
+        "{9E90EA20-B493-4FD1-A1A8-7E1361A956CF}" => "raw",
+        "{98951333-B9CD-48B1-A0A3-FF40682D73F7}" => "communications",
+        "{4780004E-7133-41D8-8C74-660DADD2C0EE}" => "media",
+        "{B26FEB0D-EC94-477C-9494-D1AB8E753F6E}" => "movie",
+        "{9CF2A70B-F377-403B-BD6B-360863E0355C}" => "notification",
+        "{FC1CFC9B-B9D1-4CFD-B6DB-0AF1C7D6F6C0}" => "speech",
+        _ => return None,
+    })
+}
+
+/// Troca cada {CLSID} pelo nome do arquivo do efeito (ou do modo), para o mapa ficar legível.
+fn names(v: &str) -> String {
+    let mut out = vec![];
+    for g in v.split(|c: char| c.is_whitespace() || c == ';' || c == '\0' || c == ',').filter(|g| g.starts_with('{') && g.len() >= 38) {
+        let g = &g[..38];
+        if g.starts_with("{00000000") {
+            out.push("∅".to_string());
+        } else if g.eq_ignore_ascii_case(crate::engine::CLSID) {
+            out.push("SurroundRescue".to_string());
+        } else if let Some(m) = mode_name(g) {
+            out.push(m.to_string());
+        } else {
+            out.push(fx_dll(g).unwrap_or_else(|| g.to_string()));
+        }
+    }
+    if out.is_empty() { v.trim().to_string() } else { out.join("+") }
+}
+
+/// Mapa de cada dispositivo conectado: formato, todas as posições de efeito e modos declarados.
+/// Vai no "Relatar problema": com ele dá para tratar um caso novo sem pedir mais nada.
+pub fn device_map() -> String {
+    let defs = sr_host::diag::defaults();
+    let mut s = String::new();
+    for flow in ["Render", "Capture"] {
+        for d in crate::devices::list(flow).iter().filter(|d| d.connected) {
+            let id = d.id.to_lowercase();
+            let is_def = defs.iter().any(|x| x.as_deref() == Some(id.as_str()));
+            let base = format!(r"{}\{flow}\{}", crate::devices::MMDEV, d.id);
+            let hk = RegKey::predef(HKEY_LOCAL_MACHINE);
+            // formato do dispositivo (WAVEFORMATEX gravado pelo Windows)
+            let fmt = hk
+                .open_subkey(format!(r"{base}\Properties"))
+                .ok()
+                .and_then(|k| k.get_raw_value("{f19f064d-082c-4e27-bc73-6882a1bb8e4c},0").ok())
+                .map(|v| v.bytes)
+                .filter(|b| b.len() >= 16 + 8)
+                .map(|b| {
+                    let w = &b[8..]; // PROPVARIANT: 8 bytes de cabeçalho antes do blob
+                    let ch = u16::from_le_bytes([w[2], w[3]]);
+                    let rate = u32::from_le_bytes([w[4], w[5], w[6], w[7]]);
+                    let bits = u16::from_le_bytes([w[14], w[15]]);
+                    format!("{rate} Hz {bits} bit {ch}ch")
+                })
+                .unwrap_or_else(|| "?".into());
+            let excl = dword(flow, &d.id, "Properties", "{b3f8fa53-0004-438e-9003-51a46e139bfc},3").map(|v| v != 0);
+            let sysfx_off = dword(flow, &d.id, "FxProperties", "{1da5d803-d492-4edd-8c23-e0c0ffee7f0e},5").unwrap_or(0) != 0;
+            s.push_str(&format!(
+                "{} · {}{} · {fmt} · enh={} · excl={} · {}\n",
+                if flow == "Render" { "OUT" } else { "IN" },
+                d.device,
+                if is_def { " (default)" } else { "" },
+                if sysfx_off { "off" } else { "on" },
+                excl.map(|v| if v { "yes" } else { "no" }).unwrap_or("?"),
+                crate::engine::target_key(flow, &d.id).map(|k| format!("target={}", k.rsplit(',').next().unwrap_or(""))).unwrap_or_default()
+            ));
+            // hardware e driver: id do hardware (VID/PID), barramento, forma, .inf/versão, serviço do Windows
+            if let Ok(p) = hk.open_subkey(format!(r"{base}\Properties")) {
+                let gs = |k: &str| p.get_value::<String, _>(k).ok();
+                let gd = |k: &str| p.get_value::<u32, _>(k).ok();
+                let path = gs("{b3f8fa53-0004-438e-9003-51a46e139bfc},2").unwrap_or_default();
+                let inst = path.split_once('}').map(|(_, r)| r.trim_start_matches('.').to_string()).unwrap_or_default();
+                s.push_str(&format!(
+                    "    hw = {} · bus = {} · form = {} · jack = {}
+    driver = {}
+",
+                    gs("{80f111c3-b103-42e1-afb6-db7a6fa8be1f},0").or_else(|| gs("{a8b865dd-2e3d-4094-ad97-e593a70c75d6},8")).unwrap_or_else(|| "?".into()),
+                    gs("{a45c254e-df1c-4efd-8020-67d146a850e0},24").unwrap_or_else(|| "?".into()),
+                    gd("{1da5d803-d492-4edd-8c23-e0c0ffee7f0e},0").map(|v| v.to_string()).unwrap_or_else(|| "?".into()),
+                    gs("{1da5d803-d492-4edd-8c23-e0c0ffee7f0e},8").unwrap_or_else(|| "?".into()),
+                    gs("{83da6326-97a6-4088-9453-a1923f573b29},3").unwrap_or_else(|| "?".into()),
+                ));
+                // serviço do Windows que move o dispositivo (usbaudio, usbaudio2, HDAudio, BthA2dp…) e o driver instalado
+                if !inst.is_empty() {
+                    if let Ok(e) = hk.open_subkey(format!(r"SYSTEM\CurrentControlSet\Enum\{inst}")) {
+                        let svc: String = e.get_value("Service").unwrap_or_default();
+                        let drv: String = e.get_value("Driver").unwrap_or_default();
+                        let (ver, prov) = hk
+                            .open_subkey(format!(r"SYSTEM\CurrentControlSet\Control\Class\{drv}"))
+                            .map(|c| (c.get_value::<String, _>("DriverVersion").unwrap_or_default(), c.get_value::<String, _>("ProviderName").unwrap_or_default()))
+                            .unwrap_or_default();
+                        s.push_str(&format!("    service = {svc} · provider = {prov} · version = {ver}
+"));
+                    }
+                }
+            }
+            if let Ok(k) = hk.open_subkey(format!(r"{base}\FxProperties")) {
+                let mut rows: Vec<(String, String)> = k
+                    .enum_values()
+                    .flatten()
+                    // todas as chaves: um caso novo de driver pode usar qualquer uma
+                    .map(|(n, v)| {
+                        let prefix = &n[1..9];
+                        let slot = n.rsplit(',').next().unwrap_or("?").to_string();
+                        let val = match v.vtype {
+                            REG_DWORD => format!("{}", u32::from_le_bytes(v.bytes[..4].try_into().unwrap_or([0; 4]))),
+                            REG_BINARY => v.bytes.iter().take(48).map(|b| format!("{b:02X}")).collect::<String>(),
+                            _ => names(&v.to_string()),
+                        };
+                        (format!("{prefix},{slot}"), val)
+                    })
+                    .collect();
+                rows.sort_by_key(|(k, _)| {
+                    let (p, n) = k.split_once(',').unwrap_or((k, "0"));
+                    (p.to_string(), n.parse::<u32>().unwrap_or(0))
+                });
+                for (k, v) in rows {
+                    s.push_str(&format!("    {k} = {v}\n"));
+                }
+            } else {
+                s.push_str("    (sem FxProperties)\n");
+            }
+        }
+    }
+    s
 }

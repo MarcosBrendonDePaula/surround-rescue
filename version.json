@@ -1,4 +1,4 @@
 {
-  "version": "0.6.2",
-  "notes": "Diagnóstico em Configurações: confere cada ponto do caminho do som (dispositivo padrão do Windows, motor instalado e carregado, melhorias de áudio, programas concorrentes, esquema de efeitos do driver) e testa ao vivo se o som passa pelo motor. O resultado vai junto no Relatar problema. Depois de atualizar, clique em \"Atualizar o motor\"."
+  "version": "0.6.3",
+  "notes": "Correção: em fones e placas que usam o esquema de efeitos SFX/MFX/EFX (muitos fones USB e saídas HDMI) o Windows nunca carregava o motor na saída. Depois de atualizar, clique em \"Atualizar o motor\": ele vai para a posição certa sozinho. O modo automático agora prefere o dispositivo padrão do Windows. Relatar problema leva o mapa completo dos dispositivos (copiado para colar na issue)."
 }
