@@ -371,7 +371,14 @@ fn main() {
     }
     let state = AppState { config: Mutex::new(load()), applied: Mutex::new(String::new()), last_text: Mutex::new(String::new()), seen: Mutex::new(Default::default()), test: Mutex::new(-1) };
     // Reaplica na inicialização: garante o estado salvo mesmo após reinício.
-    let _ = apply_now(&state);
+    // Em outra thread: o caminho de áudio inicializa COM como MTA, e a thread principal
+    // precisa ficar livre para o OleInitialize (STA) da janela — senão panic RPC_E_CHANGED_MODE.
+    let state = std::thread::spawn(move || {
+        let _ = apply_now(&state);
+        state
+    })
+    .join()
+    .expect("apply_now");
 
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _, _| show(app)))
