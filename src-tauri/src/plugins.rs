@@ -80,6 +80,9 @@ pub fn set_chain(endpoint: &str, chain: &Chain) -> Result<(), String> {
 /// Medições do executor (CPU, tempos, atrasos), gravadas por ele a cada 1 s.
 /// Níveis de pico de cada caixa (escrito pelo executor ~15 vezes por segundo).
 pub fn read_levels() -> serde_json::Value {
+    // avisa o executor que alguém está olhando os níveis (aba Fluxo aberta): aí ele mede mesmo os
+    // fluxos simples, que normalmente nem passam por ele
+    let _ = std::fs::write(chains_dir().parent().unwrap().join("levels-wanted"), b"1");
     let p = chains_dir().parent().unwrap().join("levels.json");
     std::fs::read_to_string(p).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or(serde_json::json!({}))
 }
