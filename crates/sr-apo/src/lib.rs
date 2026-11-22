@@ -9,6 +9,7 @@
 //! ao objeto de fora, e há um IUnknown interno "não delegante" — como manda a regra de agregação do COM.
 
 pub mod config;
+mod remix;
 mod engine;
 mod register;
 
@@ -292,16 +293,7 @@ impl Core {
                 return;
             }
             let o = &mut conv[..frames * out_ch];
-            for f in 0..frames {
-                let src = &buf[f * in_ch..f * in_ch + in_ch];
-                if out_ch == 1 {
-                    o[f] = src.iter().sum::<f32>() / in_ch as f32; // estéreo (ou mais) → mono: média
-                } else {
-                    for c in 0..out_ch {
-                        o[f * out_ch + c] = if in_ch == 1 { src[0] } else if c < in_ch { src[c] } else { 0.0 };
-                    }
-                }
-            }
+            remix::remix(buf, in_ch, o, out_ch, frames);
             from_float(o, kind, dst as *mut u8);
         };
         // quando não processa, a saída recebe a entrada (convertida se os canais forem diferentes): com
