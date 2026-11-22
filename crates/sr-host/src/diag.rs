@@ -178,3 +178,45 @@ unsafe fn loopback(device: &str, secs: f64, path: &std::path::Path) -> Result<(u
     std::fs::write(path, w).map_err(|e| Error::new(windows::Win32::Foundation::E_FAIL, e.to_string()))?;
     Ok((rate, ch))
 }
+
+/// Grava o microfone pedindo MONO 48 kHz float (como jogos Unity/FMOD), em WAV, para ver o que eles recebem.
+pub fn record_mono(device: &str, secs: f64, path: &std::path::Path) -> std::result::Result<u32, String> {
+    unsafe { rec_mono(device, secs, path).map_err(|e| format!("{e}")) }
+}
+
+unsafe fn rec_mono(device: &str, secs: f64, path: &std::path::Path) -> Result<u32> {
+    let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+    let en: IMMDeviceEnumerator = CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)?;
+    let dev = en.GetDevice(&HSTRING::from(format!("{{0.0.1.00000000}}.{}", device.to_lowercase())))?;
+    let client: IAudioClient = dev.Activate(CLSCTX_ALL, None)?;
+    let wf = WAVEFORMATEX { wFormatTag: 3, nChannels: 1, nSamplesPerSec: 48000, nAvgBytesPerSec: 48000 * 4, nBlockAlign: 4, wBitsPerSample: 32, cbSize: 0 };
+    client.Initialize(AUDCLNT_SHAREMODE_SHARED, 0, 1_000_000, 0, &wf, None)?;
+    let cc: IAudioCaptureClient = client.GetService()?;
+    client.Start()?;
+    let mut out: Vec<f32> = vec![];
+    let end = std::time::Instant::now() + std::time::Duration::from_secs_f64(secs);
+    while std::time::Instant::now() < end {
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        loop {
+            if cc.GetNextPacketSize()? == 0 {
+                break;
+            }
+            let (mut data, mut frames, mut flags) = (std::ptr::null_mut(), 0u32, 0u32);
+            cc.GetBuffer(&mut data, &mut frames, &mut flags, None, None)?;
+            for k in 0..frames as usize {
+                out.push(if flags & 2 != 0 { 0.0 } else { *(data as *const f32).add(k) });
+            }
+            cc.ReleaseBuffer(frames)?;
+        }
+    }
+    client.Stop()?;
+    let n = (out.len() * 4) as u32;
+    let mut w = vec![];
+    w.extend(b"RIFF"); w.extend((36 + n).to_le_bytes()); w.extend(b"WAVEfmt ");
+    w.extend(16u32.to_le_bytes()); w.extend(3u16.to_le_bytes()); w.extend(1u16.to_le_bytes());
+    w.extend(48000u32.to_le_bytes()); w.extend((48000u32 * 4).to_le_bytes()); w.extend(4u16.to_le_bytes()); w.extend(32u16.to_le_bytes());
+    w.extend(b"data"); w.extend(n.to_le_bytes());
+    for s in out { w.extend(s.to_le_bytes()); }
+    std::fs::write(path, w).map_err(|e| Error::new(windows::Win32::Foundation::E_FAIL, e.to_string()))?;
+    Ok(48000)
+}

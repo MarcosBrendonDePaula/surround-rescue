@@ -485,3 +485,15 @@ mod vazamento {
         println!("microfone com o tom no fone: pico {:.1} dB média {:.1} dB", loud.2, loud.3);
     }
 }
+
+#[cfg(test)]
+mod grava_mono {
+    /// Grava 6 s do microfone em mono, como o jogo pede (cargo test -- --ignored --nocapture grava_mic_mono)
+    #[test]
+    #[ignore]
+    fn grava_mic_mono() {
+        let d = crate::system::pick(&crate::devices::list("Capture"), None).unwrap();
+        let p = std::env::temp_dir().join("sr-mic-mono.wav");
+        println!("{:?} -> {}", sr_host::diag::record_mono(&d.id, 6.0, &p), p.display());
+    }
+}

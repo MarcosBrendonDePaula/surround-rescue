@@ -285,8 +285,11 @@ impl Core {
                 from_float(buf, kind, dst as *mut u8);
                 return;
             }
-            if !split || frames * out_ch > conv.len() {
-                return; // conversão precisa de buffer de saída próprio (o Windows sempre dá um nesse caso)
+            // no mesmo buffer (in-place) só cabe diminuir canais (estéreo → mono); aumentar precisa de
+            // buffer próprio. Antes, no mesmo buffer, não escrevia nada e o Windows lia o estéreo como mono:
+            // metade do bloco esticada (voz robótica).
+            if frames * out_ch > conv.len() || (!split && out_ch > in_ch) {
+                return;
             }
             let o = &mut conv[..frames * out_ch];
             for f in 0..frames {
@@ -305,8 +308,8 @@ impl Core {
         // buffers separados, sair sem escrever deixava na saída o bloco anterior (som repetido = robótico)
         let len = frames * in_ch;
         let pass = |scratch: &mut Vec<f32>, conv: &mut Vec<f32>| {
-            if !split {
-                return;
+            if !split && in_ch == out_ch {
+                return; // mesmo buffer e mesmos canais: a saída já é a entrada
             }
             if in_ch == out_ch {
                 let fb = self.frame_bytes.load(Ordering::Relaxed);
