@@ -1,16 +1,22 @@
-# Publica uma versão nova quando o version.json muda na main.
+# Publica uma versão nova a partir de uma tag.
 #
-# Como lançar: mude "version" (e "notes") no version.json e faça push na main.
-# Se a tag v<versão> ainda não existe, compila tudo no Windows, gera o instalador e cria a release
-# com ele. O app instalado lê o version.json (raw) e oferece a atualização.
+# Como lançar: crie uma tag anotada na main e envie:
+#   git tag -a v0.6.6 -m "O que mudou nesta versão"
+#   git push origin v0.6.6
+# A publicação compila, cria a release com o instalador e SÓ DEPOIS atualiza o version.json na main com a
+# versão, as notas, o link exato do instalador e o SHA-256 dele. O app instalado lê o version.json (raw),
+# então só oferece a versão quando o instalador já existe, e confere que baixou exatamente aquele arquivo.
 
 name: Publicar versão
 
 on:
   push:
-    branches: [main]
-    paths: [version.json]
+    tags: ["v*.*.*"]
   workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag já existente para publicar (ex.: v0.6.6)"
+        required: true
 
 permissions:
   contents: write
@@ -20,39 +26,39 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+          fetch-depth: 0
 
-      - name: Ler a versão
+      - name: Ler a versão e as notas da tag
         id: v
         shell: pwsh
         run: |
-          $j = Get-Content version.json -Raw | ConvertFrom-Json
-          $v = $j.version
-          if ($v -notmatch '^\d+\.\d+\.\d+$') { throw "versão inválida no version.json: $v" }
-          $exists = [bool](git ls-remote --tags origin "refs/tags/v$v")
+          $tag = "${{ github.event.inputs.tag || github.ref_name }}"
+          $v = $tag.TrimStart('v')
+          if ($v -notmatch '^\d+\.\d+\.\d+$') { throw "tag inválida: $tag (use vX.Y.Z)" }
+          git fetch --tags --force
+          $notes = (git for-each-ref "refs/tags/$tag" --format='%(contents)').Trim()
+          if (-not $notes) { $notes = "Surround Rescue $v" }
+          Set-Content -Path notes.txt -Value $notes -Encoding utf8
           "version=$v" >> $env:GITHUB_OUTPUT
-          "exists=$($exists.ToString().ToLower())" >> $env:GITHUB_OUTPUT
-          if ($exists) { "A versão v$v já foi publicada; nada a fazer." }
+          "tag=$tag" >> $env:GITHUB_OUTPUT
 
       - name: Rust (64 e 32 bits)
-        if: steps.v.outputs.exists != 'true'
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-pc-windows-msvc, i686-pc-windows-msvc
 
       - uses: Swatinem/rust-cache@v2
-        if: steps.v.outputs.exists != 'true'
 
       - uses: actions/setup-node@v4
-        if: steps.v.outputs.exists != 'true'
         with:
           node-version: 20
 
       - name: Dependências do empacotador
-        if: steps.v.outputs.exists != 'true'
         run: npm ci
 
       - name: Baixar o Equalizer APO (instalador de terceiros, GPL-2.0)
-        if: steps.v.outputs.exists != 'true'
         shell: pwsh
         run: |
           $dst = "src-tauri/resources/EqualizerAPO-x64.exe"
@@ -60,7 +66,6 @@ jobs:
           if ((Get-Item $dst).Length -lt 1MB) { throw "download do Equalizer APO falhou" }
 
       - name: Versão no tauri.conf.json
-        if: steps.v.outputs.exists != 'true'
         shell: pwsh
         run: |
           $p = "src-tauri/tauri.conf.json"
@@ -69,26 +74,51 @@ jobs:
           $c | ConvertTo-Json -Depth 32 | Set-Content $p -Encoding utf8
 
       - name: Compilar motor (APO) e executor de 32 bits
-        if: steps.v.outputs.exists != 'true'
         run: |
           cargo build --release -p sr-apo
           cargo build --release -p sr-bridge32 --target i686-pc-windows-msvc
 
       - name: Compilar o app e gerar o instalador
-        if: steps.v.outputs.exists != 'true'
         run: npx tauri build
 
       - name: Publicar a release
-        if: steps.v.outputs.exists != 'true'
+        id: rel
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           $v = "${{ steps.v.outputs.version }}"
+          $tag = "${{ steps.v.outputs.tag }}"
           $src = Get-ChildItem "target/release/bundle/nsis" -Filter "*_${v}_x64-setup.exe" | Select-Object -First 1
           if (-not $src) { throw "instalador não encontrado" }
-          # nome fixo: é o que o atualizador do app baixa
           $asset = "SurroundRescue-$v-setup.exe"
           Copy-Item $src.FullName $asset
-          $notes = (Get-Content version.json -Raw | ConvertFrom-Json).notes
-          gh release create "v$v" $asset --title "Surround Rescue $v" --notes "$notes" --target "${{ github.sha }}"
+          $sha = (Get-FileHash $asset -Algorithm SHA256).Hash.ToLower()
+          gh release view $tag *> $null
+          if ($LASTEXITCODE -eq 0) { gh release upload $tag $asset --clobber } else { gh release create $tag $asset --title "Surround Rescue $v" --notes-file notes.txt }
+          "sha=$sha" >> $env:GITHUB_OUTPUT
+          "asset=$asset" >> $env:GITHUB_OUTPUT
+
+      # só agora (com o instalador publicado) os apps ficam sabendo da versão nova
+      - name: Atualizar o version.json na main
+        shell: pwsh
+        run: |
+          $v = "${{ steps.v.outputs.version }}"
+          $tag = "${{ steps.v.outputs.tag }}"
+          git fetch origin main
+          git checkout -B main origin/main
+          $notes = Get-Content notes.txt -Raw
+          $obj = [ordered]@{
+            version = $v
+            notes = $notes.Trim()
+            url = "https://github.com/${{ github.repository }}/releases/download/$tag/${{ steps.rel.outputs.asset }}"
+            sha256 = "${{ steps.rel.outputs.sha }}"
+            published_at = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+          }
+          $json = $obj | ConvertTo-Json
+          [System.IO.File]::WriteAllText("version.json", $json + "`n", (New-Object System.Text.UTF8Encoding $false))
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add version.json
+          git commit -m "version.json: $v publicada"
+          git push origin main

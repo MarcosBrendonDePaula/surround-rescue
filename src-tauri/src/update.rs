@@ -1,8 +1,9 @@
 //! Atualizador: lê `version.json` direto do repositório (raw do GitHub), compara com a versão
 //! instalada e, se houver nova, baixa o instalador publicado na release e o roda em silêncio.
 //!
-//! O `version.json` é a fonte da verdade: mudar a versão nele (na main) dispara a compilação e a
-//! publicação da release (.github/workflows/release.yml).
+//! O `version.json` é escrito pela própria publicação (.github/workflows/release.yml) DEPOIS que a release
+//! existe, com o link exato do instalador e a impressão digital (SHA-256) dele. Assim o app só vê uma versão
+//! nova quando o instalador já está lá, e confere que baixou exatamente aquele arquivo.
 
 use serde::{Deserialize, Serialize};
 use std::io::Read;
@@ -14,6 +15,17 @@ pub struct Remote {
     pub version: String,
     #[serde(default)]
     pub notes: String,
+    /// Link do instalador na release (escrito pela publicação)
+    #[serde(default)]
+    pub url: Option<String>,
+    /// SHA-256 do instalador, em hexadecimal
+    #[serde(default)]
+    pub sha256: Option<String>,
+}
+
+fn remote() -> Result<Remote, String> {
+    let url = format!("https://raw.githubusercontent.com/{REPO}/main/version.json");
+    agent().get(&url).call().map_err(|e| e.to_string()).and_then(|r| r.into_json::<Remote>().map_err(|e| e.to_string()))
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -44,8 +56,7 @@ fn agent() -> ureq::Agent {
 
 /// `cur` = versão instalada (a do tauri.conf.json, que a publicação iguala ao version.json).
 pub fn check(cur: String) -> Check {
-    let url = format!("https://raw.githubusercontent.com/{REPO}/main/version.json");
-    match agent().get(&url).call().map_err(|e| e.to_string()).and_then(|r| r.into_json::<Remote>().map_err(|e| e.to_string())) {
+    match remote() {
         Ok(r) => Check { available: newer(&r.version, &cur), latest: Some(r.version), notes: r.notes, current: cur, error: None },
         Err(e) => Check { current: cur, latest: None, notes: String::new(), available: false, error: Some(e) },
     }
@@ -59,9 +70,14 @@ pub fn installer_url(version: &str) -> String {
 /// Baixa o instalador e deixa um ajudante rodando: ele espera o app fechar, instala em silêncio
 /// (pede administrador) e abre o app de novo. Quem chama deve encerrar o app em seguida.
 pub fn download_and_run(version: &str) -> Result<(), String> {
+    // link e impressão digital publicados junto com a versão (versões antigas do version.json não têm:
+    // cai no nome fixo da release)
+    let r = remote().ok().filter(|r| r.version == version);
+    let link = r.as_ref().and_then(|r| r.url.clone()).unwrap_or_else(|| installer_url(version));
+    let expected = r.as_ref().and_then(|r| r.sha256.clone());
     let mut body = vec![];
     agent()
-        .get(&installer_url(version))
+        .get(&link)
         .call()
         .map_err(|e| format!("não baixou a versão {version}: {e}"))?
         .into_reader()
@@ -71,6 +87,13 @@ pub fn download_and_run(version: &str) -> Result<(), String> {
     // instalador NSIS começa com "MZ"; página de erro não
     if body.len() < 1024 * 1024 || &body[..2] != b"MZ" {
         return Err("o arquivo baixado não é um instalador".into());
+    }
+    if let Some(want) = expected {
+        use sha2::{Digest, Sha256};
+        let got: String = Sha256::digest(&body).iter().map(|b| format!("{b:02x}")).collect();
+        if !got.eq_ignore_ascii_case(want.trim()) {
+            return Err(format!("o instalador baixado não confere com o publicado (SHA-256 {got})"));
+        }
     }
     let dir = std::env::temp_dir().join("surround-rescue-update");
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
@@ -97,6 +120,14 @@ pub fn download_and_run(version: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn le_version_json_antigo_e_novo() {
+        let a: Remote = serde_json::from_str(r#"{"version":"0.6.5","notes":"x"}"#).unwrap();
+        assert!(a.url.is_none() && a.sha256.is_none());
+        let b: Remote = serde_json::from_str(r#"{"version":"0.6.6","notes":"x","url":"https://github.com/a/b/releases/download/v0.6.6/S.exe","sha256":"ab"}"#).unwrap();
+        assert_eq!(b.sha256.as_deref(), Some("ab"));
+    }
 
     #[test]
     fn compara_versoes() {

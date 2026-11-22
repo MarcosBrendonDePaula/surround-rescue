@@ -1,4 +1,7 @@
 {
   "version": "0.6.5",
-  "notes": "Som de programa misturado no Fluxo (ex.: Firefox no microfone) não picota mais: reserva de 40 ms e correção de ritmo entre os relógios do programa e do dispositivo."
+  "notes": "Som de programa misturado no Fluxo (ex.: Firefox no microfone) não picota mais: reserva de 40 ms e correção de ritmo entre os relógios do programa e do dispositivo.",
+  "url": "https://github.com/MarcosBrendonDePaula/surround-rescue/releases/download/v0.6.5/SurroundRescue-0.6.5-setup.exe",
+  "sha256": "28c2dc15b6f4bf0c43d78ce3185663abd04829d694ed3951fc8d1a48c8721280",
+  "published_at": "2026-11-22T03:12:19Z"
 }
