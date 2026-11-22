@@ -1,7 +1,7 @@
 {
-  "version": "0.6.7",
-  "notes": "Atualizador do Tauri: instalador assinado, conferência da assinatura e reabertura automática",
-  "url": "https://github.com/MarcosBrendonDePaula/surround-rescue/releases/download/v0.6.7/SurroundRescue-0.6.7-setup.exe",
-  "sha256": "754a4e4488d4d44f137430d8c8ba7962d7047419721e4a9c4e77127178a4a574",
-  "published_at": "2026-11-22T16:29:52Z"
+  "version": "0.6.8",
+  "notes": "Corrige o app que fechava ao abrir em algumas máquinas (conflito de COM na inicialização)",
+  "url": "https://github.com/MarcosBrendonDePaula/surround-rescue/releases/download/v0.6.8/SurroundRescue-0.6.8-setup.exe",
+  "sha256": "32d2896a34420860ed9d1554267cc4aa07f24355ca760f7bf936ca1c5ebf4bd4",
+  "published_at": "2026-11-22T18:16:28Z"
 }
