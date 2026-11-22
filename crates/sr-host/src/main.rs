@@ -297,13 +297,29 @@ fn sends_back(from: &str, to: &str) -> bool {
 
 fn audio_thread(ch: Arc<sr_ipc::Channel>, slot: Slot, stop: Arc<AtomicBool>, timing: Arc<stats::Timing>, endpoint: String) {
     let mut chain: Option<AudioChain> = None;
+    let (mut last_check, mut watching) = (Instant::now() - Duration::from_secs(1), false);
     while !stop.load(Ordering::SeqCst) {
         if let Ok(mut s) = slot.try_lock() {
             if let Some(c) = s.take() {
                 chain = Some(c);
             }
         }
-        ch.heartbeat();
+        // só se apresenta ao motor quando há o que fazer: cadeia que muda o som ou som mandado para este
+        // microfone. Sem isso o motor nem manda o áudio (nada de atraso nem risco de falha no caminho).
+        // ou o app está mostrando os níveis (aba Fluxo aberta): confere o aviso a cada meio segundo
+        if last_check.elapsed() >= Duration::from_millis(500) {
+            last_check = Instant::now();
+            watching = std::fs::metadata(root_dir().join("levels-wanted"))
+                .and_then(|m| m.modified())
+                .ok()
+                .and_then(|t| t.elapsed().ok())
+                .map(|e| e.as_secs() < 3)
+                .unwrap_or(false);
+        }
+        let needed = watching || chain.as_ref().map(|c| c.changes_audio()).unwrap_or(false) || bus::targets().contains(&endpoint.to_lowercase());
+        if needed {
+            ch.heartbeat();
+        }
         ch.serve(50, |audio, sr, chs| {
             if let Some(c) = chain.as_mut().filter(|c| c.sample_rate() == sr as f64) {
                 let frames = audio.len() / (chs as usize).max(1);

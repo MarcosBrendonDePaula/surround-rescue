@@ -9,6 +9,7 @@
 //! ao objeto de fora, e há um IUnknown interno "não delegante" — como manda a regra de agregação do COM.
 
 pub mod config;
+mod remix;
 mod engine;
 mod register;
 
@@ -54,7 +55,9 @@ fn wide<const N: usize>(s: &str) -> [u16; N] {
 pub fn reg_properties() -> APO_REG_PROPERTIES {
     APO_REG_PROPERTIES {
         clsid: CLSID_SR_APO,
-        Flags: APO_FLAG(APO_FLAG_INPLACE.0 | APO_FLAG_SAMPLESPERFRAME_MUST_MATCH.0 | APO_FLAG_FRAMESPERSECOND_MUST_MATCH.0 | APO_FLAG_BITSPERSAMPLE_MUST_MATCH.0),
+        // canais podem ser diferentes entre entrada e saída: o motor converte (microfone estéreo para um jogo que
+        // pede mono). Taxa e tipo de amostra continuam iguais (essa conversão o Windows faz fora).
+        Flags: APO_FLAG(APO_FLAG_INPLACE.0 | APO_FLAG_FRAMESPERSECOND_MUST_MATCH.0 | APO_FLAG_BITSPERSAMPLE_MUST_MATCH.0),
         szFriendlyName: wide("Surround Rescue"),
         szCopyrightInfo: wide("Surround Rescue"),
         u32MajorVersion: 1,
@@ -186,11 +189,20 @@ struct Core {
     rt: UnsafeCell<Option<Engine>>,
     /// Formato das amostras e buffer float de trabalho (criado no Lock, fora do tempo real)
     fmt: UnsafeCell<(Sample, Vec<f32>)>,
+    /// Bytes por quadro (todas as amostras de um instante), para copiar entrada → saída sem processar
+    frame_bytes: std::sync::atomic::AtomicUsize,
+    /// Já avisou no log que o Windows usa buffers separados
+    told_split: AtomicBool,
+    /// Canais de entrada e de saída (diferentes = o motor converte)
+    in_ch: std::sync::atomic::AtomicUsize,
+    out_ch: std::sync::atomic::AtomicUsize,
+    /// Saída convertida (criado no Lock, fora do tempo real)
+    conv: UnsafeCell<Vec<f32>>,
 }
 
 impl Core {
     fn new() -> Core {
-        Core { setup: Mutex::new(Setup::default()), locked: AtomicBool::new(false), rt: UnsafeCell::new(None), fmt: UnsafeCell::new((Sample::F32, vec![])) }
+        Core { setup: Mutex::new(Setup::default()), locked: AtomicBool::new(false), rt: UnsafeCell::new(None), fmt: UnsafeCell::new((Sample::F32, vec![])), frame_bytes: std::sync::atomic::AtomicUsize::new(0), told_split: AtomicBool::new(false), in_ch: std::sync::atomic::AtomicUsize::new(0), out_ch: std::sync::atomic::AtomicUsize::new(0), conv: UnsafeCell::new(vec![]) }
     }
 
     fn initialize(&self, size: u32, data: *const u8) -> HRESULT {
@@ -226,7 +238,17 @@ impl Core {
         log(&format!("LockForProcess taxa={sr} canais={ch} amostra={kind:?} dispositivo={:?}", setup.endpoint));
         // buffer de trabalho para o maior bloco que o Windows pode mandar
         let max = input.u32MaxFrameCount.max(4096) as usize * ch;
+        let mut uf = UNCOMPRESSEDAUDIOFORMAT::default();
+        let fb = if unsafe { fmt.GetUncompressedAudioFormat(&mut uf) }.is_ok() { (uf.dwBytesPerSampleContainer * uf.dwSamplesPerFrame) as usize } else { 0 };
+        self.frame_bytes.store(fb, Ordering::SeqCst);
         unsafe { *self.fmt.get() = (kind, vec![0.0; max]) };
+        let out_ch = unsafe { &**outs }.pFormat.as_ref().and_then(format_info).map(|f| f.1).filter(|c| *c > 0).unwrap_or(ch);
+        if out_ch != ch {
+            log(&format!("LockForProcess: converte {ch} canais → {out_ch} canais"));
+        }
+        self.in_ch.store(ch, Ordering::SeqCst);
+        self.out_ch.store(out_ch, Ordering::SeqCst);
+        unsafe { *self.conv.get() = vec![0.0; input.u32MaxFrameCount.max(4096) as usize * out_ch] };
         let engine = Engine::new(sr, ch, setup.endpoint.clone(), false);
         unsafe { *self.rt.get() = Some(engine) };
         self.locked.store(true, Ordering::SeqCst);
@@ -249,23 +271,63 @@ impl Core {
         let output = unsafe { &mut **outs };
         output.u32ValidFrameCount = input.u32ValidFrameCount;
         output.u32BufferFlags = input.u32BufferFlags;
+        // quando não processa, a saída recebe a entrada: com buffers separados, sair sem escrever deixava
+        // na saída o bloco anterior (som repetido = voz robótica)
+        let split = output.pBuffer != 0 && input.pBuffer != 0 && output.pBuffer != input.pBuffer;
+        let (in_ch, out_ch) = (self.in_ch.load(Ordering::Relaxed), self.out_ch.load(Ordering::Relaxed));
+        let frames = input.u32ValidFrameCount as usize;
+        let (kind, scratch) = unsafe { &mut *self.fmt.get() };
+        let kind = *kind;
+        // escreve `buf` (in_ch canais) na saída, convertendo para out_ch canais se precisar
+        let conv = unsafe { &mut *self.conv.get() };
+        let write = |buf: &[f32], conv: &mut Vec<f32>| {
+            let dst = if output.pBuffer != 0 { output.pBuffer } else { input.pBuffer };
+            if in_ch == out_ch || in_ch == 0 || out_ch == 0 {
+                from_float(buf, kind, dst as *mut u8);
+                return;
+            }
+            // no mesmo buffer (in-place) só cabe diminuir canais (estéreo → mono); aumentar precisa de
+            // buffer próprio. Antes, no mesmo buffer, não escrevia nada e o Windows lia o estéreo como mono:
+            // metade do bloco esticada (voz robótica).
+            if frames * out_ch > conv.len() || (!split && out_ch > in_ch) {
+                return;
+            }
+            let o = &mut conv[..frames * out_ch];
+            remix::remix(buf, in_ch, o, out_ch, frames);
+            from_float(o, kind, dst as *mut u8);
+        };
+        // quando não processa, a saída recebe a entrada (convertida se os canais forem diferentes): com
+        // buffers separados, sair sem escrever deixava na saída o bloco anterior (som repetido = robótico)
+        let len = frames * in_ch;
+        let pass = |scratch: &mut Vec<f32>, conv: &mut Vec<f32>| {
+            if !split && in_ch == out_ch {
+                return; // mesmo buffer e mesmos canais: a saída já é a entrada
+            }
+            if in_ch == out_ch {
+                let fb = self.frame_bytes.load(Ordering::Relaxed);
+                if fb > 0 {
+                    unsafe { std::ptr::copy_nonoverlapping(input.pBuffer as *const u8, output.pBuffer as *mut u8, frames * fb) };
+                }
+            } else if kind != Sample::Passthrough && len <= scratch.len() {
+                to_float(input.pBuffer as *const u8, kind, &mut scratch[..len]);
+                write(&scratch[..len], conv);
+            }
+        };
+        if split && !self.told_split.swap(true, Ordering::Relaxed) {
+            log("APOProcess: o Windows usa buffers separados de entrada e saída neste efeito");
+        }
         if input.u32BufferFlags != BUFFER_VALID || input.pBuffer == 0 {
+            pass(scratch, conv);
             return;
         }
-        let Some(engine) = (unsafe { &mut *self.rt.get() }) else { return };
-        let len = input.u32ValidFrameCount as usize * engine.channels();
-        let (kind, scratch) = unsafe { &mut *self.fmt.get() };
-        if *kind == Sample::Passthrough {
-            return; // formato desconhecido: o Windows copia entrada → saída (in-place)
-        }
-        if len > scratch.len() {
-            return; // bloco maior que o previsto: passa direto (nunca alocar aqui)
+        let Some(engine) = (unsafe { &mut *self.rt.get() }) else { return pass(scratch, conv) };
+        if kind == Sample::Passthrough || len > scratch.len() {
+            return pass(scratch, conv); // formato desconhecido ou bloco grande: passa sem tocar
         }
         let buf = &mut scratch[..len];
-        to_float(input.pBuffer as *const u8, *kind, buf);
+        to_float(input.pBuffer as *const u8, kind, buf);
         engine.process(buf);
-        let dst = if output.pBuffer != 0 { output.pBuffer } else { input.pBuffer };
-        from_float(buf, *kind, dst as *mut u8);
+        write(buf, conv);
     }
 }
 
@@ -401,11 +463,33 @@ unsafe extern "system" fn apo_regprops(_: *mut c_void, out: *mut *mut APO_REG_PR
 unsafe extern "system" fn apo_initialize(this: *mut c_void, size: u32, data: *const u8) -> HRESULT {
     base(this, OFF_APO).core.initialize(size, data)
 }
-unsafe fn check_format(which: &str, requested: *mut c_void, out: *mut *mut c_void) -> HRESULT {
+/// Formato pedido × o do outro lado do efeito. O motor processa no lugar (in-place): não converte
+/// canais, taxa nem tipo de amostra. Se pedirem algo diferente do outro lado, responde "não, mas aceito
+/// este" (S_FALSE + o formato do outro lado): o Windows põe o conversor fora do motor.
+/// Antes respondia "sim" a tudo; com o microfone estéreo do Kraken e um jogo pedindo mono (FMOD/Unity),
+/// o Windows não punha o conversor e a abertura do microfone falhava sempre.
+unsafe fn check_format(which: &str, opposite: *mut c_void, requested: *mut c_void, out: *mut *mut c_void) -> HRESULT {
     if out.is_null() || requested.is_null() {
         return E_POINTER;
     }
     let Some(req) = IAudioMediaType::from_raw_borrowed(&requested) else { return E_POINTER };
+    let opp = if opposite.is_null() { None } else { IAudioMediaType::from_raw_borrowed(&opposite) };
+    let uf = |t: &IAudioMediaType| {
+        let mut f = UNCOMPRESSEDAUDIOFORMAT::default();
+        t.GetUncompressedAudioFormat(&mut f).ok().map(|_| f)
+    };
+    if let (Some(o), Some(fr), Some(fo)) = (opp, uf(req), opp.and_then(uf)) {
+        // canais podem ser diferentes (o motor converte); taxa e tipo de amostra, não
+        let same = (1..=8).contains(&fr.dwSamplesPerFrame)
+            && (fr.fFramesPerSecond - fo.fFramesPerSecond).abs() < 0.5
+            && fr.dwBytesPerSampleContainer == fo.dwBytesPerSampleContainer
+            && fr.guidFormatType == fo.guidFormatType;
+        if !same {
+            log(&format!("{which} {:?} diferente do outro lado {:?}: sugere o do outro lado", format_info(req), format_info(o)));
+            *out = o.clone().into_raw();
+            return S_FALSE;
+        }
+    }
     let ok = format_ok(req);
     log(&format!("{which} {:?} ok={ok}", format_info(req)));
     if ok {
@@ -416,11 +500,11 @@ unsafe fn check_format(which: &str, requested: *mut c_void, out: *mut *mut c_voi
         APOERR_FORMAT_NOT_SUPPORTED
     }
 }
-unsafe extern "system" fn apo_input_fmt(_: *mut c_void, _opp: *mut c_void, req: *mut c_void, out: *mut *mut c_void) -> HRESULT {
-    check_format("IsInputFormatSupported", req, out)
+unsafe extern "system" fn apo_input_fmt(_: *mut c_void, opp: *mut c_void, req: *mut c_void, out: *mut *mut c_void) -> HRESULT {
+    check_format("IsInputFormatSupported", opp, req, out)
 }
-unsafe extern "system" fn apo_output_fmt(_: *mut c_void, _opp: *mut c_void, req: *mut c_void, out: *mut *mut c_void) -> HRESULT {
-    check_format("IsOutputFormatSupported", req, out)
+unsafe extern "system" fn apo_output_fmt(_: *mut c_void, opp: *mut c_void, req: *mut c_void, out: *mut *mut c_void) -> HRESULT {
+    check_format("IsOutputFormatSupported", opp, req, out)
 }
 unsafe extern "system" fn apo_channels(_: *mut c_void, out: *mut u32) -> HRESULT {
     if out.is_null() {

@@ -159,6 +159,12 @@ impl Channel {
         }
         let sh = self.shared();
         let h = &sh.header;
+        // o executor ainda está com o pedido anterior (que atrasou): não escreve por cima dele, senão
+        // a resposta velha cai sobre o bloco novo e a voz sai repetida/robótica. Este bloco passa direto.
+        if h.done.load(Ordering::SeqCst) != h.seq.load(Ordering::SeqCst) {
+            h.misses.fetch_add(1, Ordering::Relaxed);
+            return false;
+        }
         sh.audio[..buf.len()].copy_from_slice(buf);
         h.sample_rate.store(sample_rate, Ordering::Relaxed);
         h.channels.store(channels, Ordering::Relaxed);

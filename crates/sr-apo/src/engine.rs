@@ -11,7 +11,7 @@ use std::time::{Duration, SystemTime};
 struct Mailbox {
     pending: Mutex<Option<EngineConfig>>,
     /// Canal com o executor de VST, aberto pela thread comum quando o executor aparece
-    host: Mutex<Option<sr_ipc::Channel>>,
+    host: Mutex<Option<Arc<sr_ipc::Channel>>>,
     stop: AtomicBool,
     /// Blocos de áudio processados (diagnóstico: prova de que o som está passando pelo motor)
     blocks: AtomicU64,
@@ -24,7 +24,9 @@ pub struct Engine {
     mic: [MicProcessor; 2],
     is_mic: bool,
     box_: Arc<Mailbox>,
-    host: Option<sr_ipc::Channel>,
+    host: Option<Arc<sr_ipc::Channel>>,
+    /// Último bloco que passou pelo executor neste dispositivo (todas as cópias do motor reaproveitam)
+    cache: Arc<Mutex<Cache>>,
 }
 
 impl Engine {
@@ -39,6 +41,7 @@ impl Engine {
             is_mic: capture,
             box_: box_.clone(),
             host: None,
+            cache: cache_for(endpoint.as_deref().unwrap_or("")),
         };
         // até chegar a configuração: passa direto
         e.out.set(&sr_dsp::Settings { enabled: false, ..Default::default() });
@@ -95,9 +98,28 @@ impl Engine {
                 self.host = h.take();
             }
         }
-        // 1) cadeia de VSTs no executor (prazo de 4 ms; atrasou = passa direto)
+        // 1) cadeia de VSTs no executor (prazo de 4 ms; atrasou = passa direto). O Windows abre várias
+        // cópias do motor no mesmo dispositivo (uma por programa que grava o microfone), e todas recebem
+        // o mesmo bloco: a primeira que chega manda ao executor e guarda o resultado; as outras copiam.
         if let Some(h) = &self.host {
-            h.process(buf, self.sr as u32, self.channels as u32, 4);
+            let key = block_hash(buf);
+            let hit = match self.cache.try_lock() {
+                Ok(c) if c.valid && c.key == key && c.data.len() >= buf.len() && c.at.map(|t| t.elapsed() < std::time::Duration::from_millis(3)).unwrap_or(false) => {
+                    buf.copy_from_slice(&c.data[..buf.len()]);
+                    true
+                }
+                _ => false,
+            };
+            if !hit && h.process(buf, self.sr as u32, self.channels as u32, 4) {
+                if let Ok(mut c) = self.cache.try_lock() {
+                    if c.data.len() >= buf.len() {
+                        c.data[..buf.len()].copy_from_slice(buf);
+                        c.key = key;
+                        c.valid = true;
+                        c.at = Some(std::time::Instant::now());
+                    }
+                }
+            }
         }
         // 2) Surround Rescue + limitador sempre por último
         if self.is_mic {
@@ -126,6 +148,44 @@ impl Drop for Engine {
     }
 }
 
+/// Canal com o executor de cada dispositivo, compartilhado por todas as cópias do motor no processo.
+fn channels() -> &'static Mutex<std::collections::HashMap<String, Arc<sr_ipc::Channel>>> {
+    static S: std::sync::OnceLock<Mutex<std::collections::HashMap<String, Arc<sr_ipc::Channel>>>> = std::sync::OnceLock::new();
+    S.get_or_init(|| Mutex::new(Default::default()))
+}
+
+/// Resultado do executor para o último bloco de um dispositivo.
+pub struct Cache {
+    key: u64,
+    valid: bool,
+    /// quando foi guardado: só vale para as cópias deste mesmo instante (o próximo bloco vem 10 ms depois;
+    /// sem isso, blocos de silêncio iguais reaproveitariam um resultado velho e repetiriam som)
+    at: Option<std::time::Instant>,
+    data: Vec<f32>,
+}
+
+/// Cache do dispositivo (criado fora do tempo real, com espaço para o maior bloco).
+fn cache_for(endpoint: &str) -> Arc<Mutex<Cache>> {
+    static S: std::sync::OnceLock<Mutex<std::collections::HashMap<String, Arc<Mutex<Cache>>>>> = std::sync::OnceLock::new();
+    let map = S.get_or_init(|| Mutex::new(Default::default()));
+    map.lock()
+        .unwrap()
+        .entry(endpoint.to_lowercase())
+        .or_insert_with(|| Arc::new(Mutex::new(Cache { key: 0, valid: false, at: None, data: vec![0.0; sr_ipc::MAX_SAMPLES] })))
+        .clone()
+}
+
+/// Impressão digital de um bloco (FNV-1a dos bits das amostras): blocos iguais = mesma impressão.
+#[inline]
+fn block_hash(buf: &[f32]) -> u64 {
+    let mut h: u64 = 0xcbf29ce484222325 ^ buf.len() as u64;
+    for v in buf {
+        h ^= v.to_bits() as u64;
+        h = h.wrapping_mul(0x100000001b3);
+    }
+    h
+}
+
 /// Thread comum: confere o arquivo 4x por segundo e manda a configuração nova.
 fn watch(path: std::path::PathBuf, endpoint: String, mb: Arc<Mailbox>, info: String) {
     let status = config::engine_dir().join(format!("status-{}.txt", endpoint.to_lowercase()));
@@ -133,13 +193,27 @@ fn watch(path: std::path::PathBuf, endpoint: String, mb: Arc<Mailbox>, info: Str
     let mut last: Option<SystemTime> = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
     // O APO (serviço) cria o canal; o executor de VST conecta quando quiser.
     // Enquanto não houver executor vivo, o tempo real nem espera (batimento ausente).
-    match sr_ipc::Channel::create(&endpoint) {
-        Ok(c) => {
-            crate::log(&format!("canal para VSTs criado em {endpoint}"));
-            *mb.host.lock().unwrap() = Some(c);
+    // o Windows abre várias cópias do motor no mesmo dispositivo (uma por programa que grava, no
+    // microfone): todas usam o MESMO canal (um de cada vez; o canal não aceita pedido sobreposto)
+    let shared = {
+        let mut map = channels().lock().unwrap();
+        match map.get(&endpoint.to_lowercase()) {
+            Some(c) => Some(c.clone()),
+            None => match sr_ipc::Channel::create(&endpoint) {
+                Ok(c) => {
+                    crate::log(&format!("canal para VSTs criado em {endpoint}"));
+                    let c = Arc::new(c);
+                    map.insert(endpoint.to_lowercase(), c.clone());
+                    Some(c)
+                }
+                Err(e) => {
+                    crate::log(&format!("canal para VSTs falhou em {endpoint}: {e}"));
+                    None
+                }
+            },
         }
-        Err(e) => crate::log(&format!("canal para VSTs falhou em {endpoint}: {e}")),
-    }
+    };
+    *mb.host.lock().unwrap() = shared;
     while !mb.stop.load(Ordering::SeqCst) {
         std::thread::sleep(Duration::from_millis(250));
         // a cada 2 s, se passou som: o app (diagnóstico) vê que o motor está processando agora
@@ -161,4 +235,5 @@ fn watch(path: std::path::PathBuf, endpoint: String, mb: Arc<Mailbox>, info: Str
             }
         }
     }
+    *mb.host.lock().unwrap() = None;
 }
