@@ -1,7 +1,7 @@
 {
-  "version": "0.6.5",
-  "notes": "Som de programa misturado no Fluxo (ex.: Firefox no microfone) não picota mais: reserva de 40 ms e correção de ritmo entre os relógios do programa e do dispositivo.",
-  "url": "https://github.com/MarcosBrendonDePaula/surround-rescue/releases/download/v0.6.5/SurroundRescue-0.6.5-setup.exe",
-  "sha256": "28c2dc15b6f4bf0c43d78ce3185663abd04829d694ed3951fc8d1a48c8721280",
-  "published_at": "2026-11-22T03:12:19Z"
+  "version": "0.6.6",
+  "notes": "Botão de atualizar corrigido: o instalador agora roda depois que o app fecha (antes o app fechava e nada acontecia). A atualização só aparece quando o instalador já está publicado e é conferida pela impressão digital (SHA-256). Quem está na 0.6.5 ou antes: baixe este instalador e rode por cima uma vez.",
+  "url": "https://github.com/MarcosBrendonDePaula/surround-rescue/releases/download/v0.6.6/SurroundRescue-0.6.6-setup.exe",
+  "sha256": "a823324b43ba9c1eafa3b8ca66d483c5810f66514b6bb2335af1d1eb2a2dee6f",
+  "published_at": "2026-11-22T03:19:15Z"
 }
