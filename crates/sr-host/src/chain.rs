@@ -270,20 +270,63 @@ struct NodeProcs {
     plugins: Vec<Option<Any>>,
     blocks: Vec<Option<crate::blocks::Block>>,
     /// Entradas externas (programa / dispositivo) por nó
-    sources: Vec<Option<sr_bridge::ring::Consumer>>,
+    sources: Vec<Option<SourceIn>>,
     ab: AudioBuffers,
+}
+
+/// Entrada vinda de outro relógio (um programa capturado toca no relógio do fone; o microfone grava no
+/// dele). Sem reserva, cada pacote atrasado virava um buraco de silêncio, e a diferença entre os relógios
+/// esvaziava ou enchia a fila: som picotado. Aqui:
+/// - só começa a tocar com uma reserva de ~40 ms; se a reserva acabar, junta de novo (sem picotar);
+/// - corrige o ritmo devagar: fila acima do alvo pula 1 amostra a cada 100, abaixo repete 1 a cada 100.
+pub struct SourceIn {
+    cons: sr_bridge::ring::Consumer,
+    target: usize,
+    playing: bool,
+    tick: u32,
+    last: (f32, f32),
+}
+
+impl SourceIn {
+    pub fn new(cons: sr_bridge::ring::Consumer, sample_rate: f64) -> SourceIn {
+        SourceIn { cons, target: (sample_rate * 0.040) as usize, playing: false, tick: 0, last: (0.0, 0.0) }
+    }
+
+    pub fn mix_into(&mut self, l: &mut [f32], r: &mut [f32]) {
+        let n = l.len().min(r.len());
+        let have = self.cons.len();
+        if !self.playing {
+            if have < self.target {
+                return; // juntando a reserva
+            }
+            self.playing = true;
+        }
+        if have < n {
+            // a reserva acabou: não toca pedaços soltos, junta de novo
+            self.playing = false;
+            return;
+        }
+        // correção de ritmo (relógios diferentes)
+        let (fast, slow) = (have > self.target * 2, have < self.target / 2);
+        for i in 0..n {
+            self.tick = self.tick.wrapping_add(1);
+            if fast && self.tick % 100 == 0 {
+                let _ = self.cons.pop(); // descarta uma amostra: anda 1% mais rápido
+            }
+            let v = if slow && self.tick % 100 == 0 { Some(self.last) } else { self.cons.pop() };
+            if let Some((x, y)) = v {
+                self.last = (x, y);
+                l[i] += x;
+                r[i] += y;
+            }
+        }
+    }
 }
 
 impl crate::graph::Processor for NodeProcs {
     fn process(&mut self, node: usize, l: &mut [f32], r: &mut [f32]) -> bool {
-        if let Some(Some(src)) = self.sources.get(node) {
-            // soma o que chegou do programa/dispositivo (faltou = silêncio neste trecho)
-            for (a, b) in l.iter_mut().zip(r.iter_mut()) {
-                if let Some((x, y)) = src.pop() {
-                    *a += x;
-                    *b += y;
-                }
-            }
+        if let Some(Some(src)) = self.sources.get_mut(node) {
+            src.mix_into(l, r);
             return true;
         }
         if let Some(Some(b)) = self.blocks.get_mut(node) {
@@ -454,7 +497,7 @@ impl AudioChain {
                 _ => None,
             })
             .collect();
-        let sources = graph.nodes.iter().map(|n| sources.remove(&n.id)).collect();
+        let sources = graph.nodes.iter().map(|n| sources.remove(&n.id).map(|c| SourceIn::new(c, sample_rate))).collect();
         let mut ab = AudioBuffers::new(2, 2, MAX_FRAMES, sample_rate);
         ab.block_size = 0;
         let bufs = (0..graph.nodes.len()).map(|_| [Vec::with_capacity(MAX_FRAMES), Vec::with_capacity(MAX_FRAMES)]).collect();
@@ -588,5 +631,58 @@ mod soft_tests {
     #[test]
     fn caixa_nova_recarrega() {
         assert!(soft_update(&cfg(1.0, 0.0, false), &cfg(1.0, 0.0, true), 48000.0).is_none());
+    }
+}
+
+#[cfg(test)]
+mod source_tests {
+    use super::SourceIn;
+
+    #[test]
+    fn rajadas_irregulares_nao_viram_buracos() {
+        // programa entrega em rajadas de 5 a 25 ms; o microfone pede blocos de 10 ms, mesmo relógio na média
+        let (p, c) = sr_bridge::ring::channel(48000);
+        let mut s = SourceIn::new(c, 48000.0);
+        let bursts = [240usize, 1200, 480, 720, 240, 960, 480, 480, 1200, 240];
+        let (mut pushed, mut holes, mut started) = (0usize, 0, false);
+        for k in 0..400 {
+            // entrega uma rajada só quando o "atraso" do programa deixa
+            let want = (k + 1) * 480;
+            while pushed + 240 <= want + 480 {
+                let b = bursts[(pushed / 240) % bursts.len()].min(want + 960 - pushed);
+                for _ in 0..b {
+                    p.push(0.5, 0.5);
+                }
+                pushed += b;
+                if b == 0 {
+                    break;
+                }
+            }
+            let (mut l, mut r) = (vec![0.0f32; 480], vec![0.0f32; 480]);
+            s.mix_into(&mut l, &mut r);
+            let silent = l.iter().filter(|v| **v == 0.0).count();
+            if silent == 0 {
+                started = true;
+            } else if started {
+                holes += 1;
+            }
+        }
+        assert!(started, "nunca começou a tocar");
+        assert_eq!(holes, 0, "buracos depois de começar");
+    }
+
+    #[test]
+    fn relogio_mais_rapido_nao_enche_a_fila() {
+        // programa 1% mais rápido que o microfone: a fila não pode crescer sem parar
+        let (p, c) = sr_bridge::ring::channel(96000);
+        let mut s = SourceIn::new(c, 48000.0);
+        for k in 0..3000 {
+            for _ in 0..(485 + (k % 10 == 0) as usize) {
+                p.push(0.1, 0.1);
+            }
+            let (mut l, mut r) = (vec![0.0f32; 480], vec![0.0f32; 480]);
+            s.mix_into(&mut l, &mut r);
+        }
+        assert!(s.cons.len() < 48000 / 10, "fila cresceu para {}", s.cons.len());
     }
 }
