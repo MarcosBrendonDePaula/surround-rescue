@@ -1,7 +1,7 @@
 {
-  "version": "0.6.6",
-  "notes": "Botão de atualizar corrigido: o instalador agora roda depois que o app fecha (antes o app fechava e nada acontecia). A atualização só aparece quando o instalador já está publicado e é conferida pela impressão digital (SHA-256). Quem está na 0.6.5 ou antes: baixe este instalador e rode por cima uma vez.",
-  "url": "https://github.com/MarcosBrendonDePaula/surround-rescue/releases/download/v0.6.6/SurroundRescue-0.6.6-setup.exe",
-  "sha256": "a823324b43ba9c1eafa3b8ca66d483c5810f66514b6bb2335af1d1eb2a2dee6f",
-  "published_at": "2026-11-22T03:19:15Z"
+  "version": "0.6.7",
+  "notes": "Atualizador do Tauri: instalador assinado, conferência da assinatura e reabertura automática",
+  "url": "https://github.com/MarcosBrendonDePaula/surround-rescue/releases/download/v0.6.7/SurroundRescue-0.6.7-setup.exe",
+  "sha256": "754a4e4488d4d44f137430d8c8ba7962d7047419721e4a9c4e77127178a4a574",
+  "published_at": "2026-11-22T16:29:52Z"
 }
