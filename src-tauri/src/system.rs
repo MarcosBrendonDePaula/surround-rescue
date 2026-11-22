@@ -35,8 +35,8 @@ pub fn apo_installed() -> bool {
     PathBuf::from(EQAPO_DIR).join("EqualizerAPO.dll").exists()
 }
 
-/// Dispositivo escolhido; sem escolha: o primeiro com efeito (Equalizer APO ou motor próprio), preferindo
-/// um headset Razer; sem nenhum, o primeiro conectado.
+/// Dispositivo escolhido; sem escolha: um com efeito (Equalizer APO ou motor próprio), preferindo o padrão
+/// do Windows e depois um headset Razer; sem nenhum, o padrão do Windows ou o primeiro conectado.
 pub fn pick(list: &[Device], chosen: Option<&str>) -> Option<Device> {
     if let Some(id) = chosen {
         if let Some(d) = list.iter().find(|d| d.id == id) {
@@ -46,8 +46,16 @@ pub fn pick(list: &[Device], chosen: Option<&str>) -> Option<Device> {
     // com efeito: o Equalizer APO ou o nosso motor (antes só contava o Equalizer APO, e num PC só com
     // o nosso motor o app não achava dispositivo nenhum e nunca mandava as configurações)
     let mut with_apo: Vec<&Device> = list.iter().filter(|d| d.connected && (d.apo || crate::engine::installed_on(&d.flow, &d.id))).collect();
-    with_apo.sort_by_key(|d| !d.device.contains("Kraken"));
-    with_apo.first().cloned().cloned().or_else(|| list.iter().find(|d| d.connected).cloned())
+    // o padrão do Windows primeiro (é onde os programas tocam/gravam), depois um headset Razer
+    let defs = sr_host::diag::defaults();
+    let def = if list.first().map(|d| d.flow == "Capture").unwrap_or(false) { defs[2].clone() } else { defs[0].clone() };
+    with_apo.sort_by_key(|d| (Some(d.id.to_lowercase()) != def, !d.device.contains("Kraken")));
+    with_apo
+        .first()
+        .cloned()
+        .cloned()
+        .or_else(|| def.and_then(|g| list.iter().find(|d| d.id.to_lowercase() == g && d.connected).cloned()))
+        .or_else(|| list.iter().find(|d| d.connected).cloned())
 }
 
 pub fn status(out_choice: Option<&str>, in_choice: Option<&str>) -> Status {
