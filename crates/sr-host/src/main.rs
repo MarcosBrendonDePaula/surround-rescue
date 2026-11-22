@@ -22,6 +22,7 @@ mod vst2;
 mod clap;
 mod bridge32;
 mod bus;
+pub mod diag;
 
 use chain::{chains_dir, root_dir, AudioChain, ChainConfig, Loaded};
 use std::collections::HashMap;

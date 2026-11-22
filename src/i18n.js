@@ -19,7 +19,9 @@
     "Caixas de trás": "Rear speakers", "Intensidade do surround": "Surround intensity", "Sala virtual": "Virtual room",
     "Um eco curto, como o de um quarto, que tira o som de dentro da cabeça. Desligue para um som mais seco.":
       "A short echo, like a small room's, that moves the sound out of your head. Turn it off for a drier sound.",
-    "Dar a volta": "Go around",
+    "Dar a volta": "Go around", "Diagnóstico": "Diagnostics", "Rodar diagnóstico": "Run diagnostics",
+    "Testar o som pelo motor": "Test sound through the engine", "Tocando um tom de 2 s…": "Playing a 2 s tone…", "Verificando…": "Checking…",
+    "Confere cada ponto do caminho do som até o motor e diz o que está impedindo.": "Checks every point of the sound path up to the engine and tells you what is blocking it.",
     "O app foi atualizado, mas o motor de som no Windows ainda é o da versão anterior.": "The app was updated, but the Windows sound engine is still the previous version.",
     "Atualizar o motor": "Update the engine", "Atualizando… aceite o pedido de administrador": "Updating… accept the administrator prompt", "Relatar problema": "Report a problem", "Abrindo…": "Opening…",
     "Abre uma issue no GitHub com os logs de execução (sem dados pessoais)": "Opens a GitHub issue with the runtime logs (no personal data)", "Estilo do surround": "Surround style",

@@ -100,7 +100,7 @@ fn tr(en: bool, pt: &'static str, en_text: &'static str) -> &'static str {
 }
 
 /// Texto da issue (só execução). `lang`: "en" ou "pt".
-pub fn body(app_version: &str, own_engine: bool, host_running: bool, lines: usize, lang: &str) -> String {
+pub fn body(app_version: &str, own_engine: bool, host_running: bool, lines: usize, lang: &str, checks: &[crate::diagnose::Check]) -> String {
     let en = lang == "en";
     let devs = crate::engine::list();
     let count = |flow: &str, f: &dyn Fn(&crate::engine::DevEngine) -> bool| devs.iter().filter(|d| d.flow == flow && f(d)).count();
@@ -129,6 +129,16 @@ pub fn body(app_version: &str, own_engine: bool, host_running: bool, lines: usiz
         count("Capture", &|d| d.connected),
         count("Capture", &|d| d.connected && d.engine)
     ));
+    // diagnóstico: o que falhou primeiro (é o que mais interessa)
+    if !checks.is_empty() {
+        b.push_str(&format!("\n### {}\n\n", tr(en, "Diagnóstico", "Diagnostics")));
+        let mut sorted: Vec<&crate::diagnose::Check> = checks.iter().collect();
+        sorted.sort_by_key(|c| match c.level { "fail" => 0, "warn" => 1, _ => 2 });
+        for c in sorted {
+            let icon = match c.level { "fail" => "✗", "warn" => "⚠", _ => "✓" };
+            b.push_str(&format!("- {icon} {}{}\n", c.title, if c.detail.is_empty() { String::new() } else { format!(" — {}", c.detail) }));
+        }
+    }
     // por dispositivo conectado: o que costuma impedir o efeito de agir
     let eng_dir = data().join("engine");
     let sysfx_off = |flow: &str, id: &str| -> bool {
@@ -181,13 +191,13 @@ pub fn body(app_version: &str, own_engine: bool, host_running: bool, lines: usiz
 }
 
 /// Abre a página de issue nova já preenchida. Logs longos são encurtados para caber no link.
-pub fn open(app_version: &str, own_engine: bool, host_running: bool, lang: &str) -> Result<(), String> {
+pub fn open(app_version: &str, own_engine: bool, host_running: bool, lang: &str, checks: &[crate::diagnose::Check]) -> Result<(), String> {
     let title = format!("[{app_version}] ");
     let base = format!("https://github.com/{}/issues/new?title={}&body=", crate::update::REPO, enc(&title));
     // menos linhas de log até o link caber
     let mut lines = 30;
     let url = loop {
-        let u = format!("{base}{}", enc(&body(app_version, own_engine, host_running, lines, lang)));
+        let u = format!("{base}{}", enc(&body(app_version, own_engine, host_running, lines, lang, checks)));
         if u.len() <= MAX_URL || lines <= 2 {
             break u;
         }
@@ -217,8 +227,8 @@ mod tests {
     #[test]
     #[ignore]
     fn mostra_relatorio() {
-        println!("{}", body("teste", true, true, 30, "pt"));
-        println!("{}", body("test", true, true, 30, "en"));
+        println!("{}", body("teste", true, true, 30, "pt", &[]));
+        println!("{}", body("test", true, true, 30, "en", &[]));
     }
 
     #[test]

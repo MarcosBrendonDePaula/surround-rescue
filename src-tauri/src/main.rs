@@ -2,6 +2,7 @@
 
 mod devices;
 mod engine;
+mod diagnose;
 mod report;
 mod update;
 mod eqapo;
@@ -122,6 +123,29 @@ fn engine_test(speaker: i32, state: State<AppState>) -> Result<(), String> {
     apply_now(&state).map(|_| ())
 }
 
+/// Diagnóstico: verificações de cada ponto do caminho do som (sem o teste ativo).
+#[tauri::command]
+async fn run_diagnostics(lang: Option<String>, state: State<'_, AppState>) -> Result<Vec<diagnose::Check>, String> {
+    let c = state.config.lock().unwrap().clone();
+    let lang = lang.unwrap_or_else(|| "pt".into());
+    tauri::async_runtime::spawn_blocking(move || diagnose::run_checks(c.own_engine, c.output_device.as_deref(), c.input_device.as_deref(), &lang))
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Teste ativo: toca um tom de 2 s na saída escolhida e confere se passou pelo motor.
+#[tauri::command]
+async fn diagnose_test(lang: Option<String>, state: State<'_, AppState>) -> Result<diagnose::Check, String> {
+    let c = state.config.lock().unwrap().clone();
+    let lang = lang.unwrap_or_else(|| "pt".into());
+    tauri::async_runtime::spawn_blocking(move || {
+        let d = system::pick(&devices::list("Render"), c.output_device.as_deref()).ok_or("sem saída de som")?;
+        Ok(diagnose::active_test(&d.id, &lang))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// "Relatar um problema": abre uma issue nova no GitHub com dados de execução (sem dados pessoais).
 #[tauri::command]
 async fn report_issue(lang: Option<String>, app: tauri::AppHandle, state: State<'_, AppState>, host: State<'_, plugins::HostProcess>) -> Result<(), String> {
@@ -129,7 +153,13 @@ async fn report_issue(lang: Option<String>, app: tauri::AppHandle, state: State<
     let own = state.config.lock().unwrap().own_engine;
     let running = host.running();
     let lang = lang.unwrap_or_else(|| "pt".into());
-    tauri::async_runtime::spawn_blocking(move || report::open(&version, own, running, &lang)).await.map_err(|e| e.to_string())?
+    let c = state.config.lock().unwrap().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let checks = diagnose::run_checks(own, c.output_device.as_deref(), c.input_device.as_deref(), &lang);
+        report::open(&version, own, running, &lang, &checks)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -334,7 +364,7 @@ fn main() {
         .plugin(tauri_plugin_single_instance::init(|app, _, _| show(app)))
         .manage(state)
         .manage(plugins::HostProcess(Mutex::new(None)))
-        .invoke_handler(tauri::generate_handler![engine_outdated, report_issue, engine_test, get_snapshot, set_config, get_status, set_device_engine, set_autostart, preview, recent_apps, scan_plugins, get_chain, set_chain, host_status, open_plugin_window, audio_apps, list_flows, get_flow, set_flow, delete_flow, get_stats, plugin_env, engine_devices, set_engine, get_levels, check_update, install_update])
+        .invoke_handler(tauri::generate_handler![run_diagnostics, diagnose_test, engine_outdated, report_issue, engine_test, get_snapshot, set_config, get_status, set_device_engine, set_autostart, preview, recent_apps, scan_plugins, get_chain, set_chain, host_status, open_plugin_window, audio_apps, list_flows, get_flow, set_flow, delete_flow, get_stats, plugin_env, engine_devices, set_engine, get_levels, check_update, install_update])
         .setup(|app| {
             let show_i = MenuItem::with_id(app, "show", "Abrir", true, None::<&str>)?;
             let toggle_i = MenuItem::with_id(app, "toggle", "Ligar/Desligar surround", true, None::<&str>)?;
