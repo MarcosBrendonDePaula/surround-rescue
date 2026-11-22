@@ -453,3 +453,35 @@ mod teste_mic {
         println!("[{}] {} | {} | {}", c.level, c.title, c.detail, c.fix);
     }
 }
+
+#[cfg(test)]
+mod grava_saida {
+    /// Grava 20 s do que toca na saída (cargo test -- --ignored --nocapture grava_saida_jogo)
+    #[test]
+    #[ignore]
+    fn grava_saida_jogo() {
+        let d = crate::system::pick(&crate::devices::list("Render"), None).unwrap();
+        let p = std::env::temp_dir().join("sr-saida-jogo.wav");
+        println!("{:?} -> {}", sr_host::diag::record_output(&d.id, 20.0, &p), p.display());
+    }
+}
+
+#[cfg(test)]
+mod vazamento {
+    /// Toca um tom no fone e grava o microfone ao mesmo tempo: quanto do fone o microfone capta
+    /// (cargo test -- --ignored --nocapture mede_vazamento)
+    #[test]
+    #[ignore]
+    fn mede_vazamento() {
+        let out = crate::system::pick(&crate::devices::list("Render"), None).unwrap();
+        let mic = crate::system::pick(&crate::devices::list("Capture"), None).unwrap();
+        let quiet = sr_host::diag::record_level(&mic.id, 2.0).unwrap();
+        let o = out.id.clone();
+        let t = std::thread::spawn(move || sr_host::diag::play_tone(&o, 3.0));
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        let loud = sr_host::diag::record_level(&mic.id, 2.0).unwrap();
+        let _ = t.join();
+        println!("microfone em silêncio: pico {:.1} dB média {:.1} dB", quiet.2, quiet.3);
+        println!("microfone com o tom no fone: pico {:.1} dB média {:.1} dB", loud.2, loud.3);
+    }
+}

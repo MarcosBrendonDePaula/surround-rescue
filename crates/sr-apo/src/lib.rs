@@ -421,11 +421,32 @@ unsafe extern "system" fn apo_regprops(_: *mut c_void, out: *mut *mut APO_REG_PR
 unsafe extern "system" fn apo_initialize(this: *mut c_void, size: u32, data: *const u8) -> HRESULT {
     base(this, OFF_APO).core.initialize(size, data)
 }
-unsafe fn check_format(which: &str, requested: *mut c_void, out: *mut *mut c_void) -> HRESULT {
+/// Formato pedido × o do outro lado do efeito. O motor processa no lugar (in-place): não converte
+/// canais, taxa nem tipo de amostra. Se pedirem algo diferente do outro lado, responde "não, mas aceito
+/// este" (S_FALSE + o formato do outro lado): o Windows põe o conversor fora do motor.
+/// Antes respondia "sim" a tudo; com o microfone estéreo do Kraken e um jogo pedindo mono (FMOD/Unity),
+/// o Windows não punha o conversor e a abertura do microfone falhava sempre.
+unsafe fn check_format(which: &str, opposite: *mut c_void, requested: *mut c_void, out: *mut *mut c_void) -> HRESULT {
     if out.is_null() || requested.is_null() {
         return E_POINTER;
     }
     let Some(req) = IAudioMediaType::from_raw_borrowed(&requested) else { return E_POINTER };
+    let opp = if opposite.is_null() { None } else { IAudioMediaType::from_raw_borrowed(&opposite) };
+    let uf = |t: &IAudioMediaType| {
+        let mut f = UNCOMPRESSEDAUDIOFORMAT::default();
+        t.GetUncompressedAudioFormat(&mut f).ok().map(|_| f)
+    };
+    if let (Some(o), Some(fr), Some(fo)) = (opp, uf(req), opp.and_then(uf)) {
+        let same = fr.dwSamplesPerFrame == fo.dwSamplesPerFrame
+            && (fr.fFramesPerSecond - fo.fFramesPerSecond).abs() < 0.5
+            && fr.dwBytesPerSampleContainer == fo.dwBytesPerSampleContainer
+            && fr.guidFormatType == fo.guidFormatType;
+        if !same {
+            log(&format!("{which} {:?} diferente do outro lado {:?}: sugere o do outro lado", format_info(req), format_info(o)));
+            *out = o.clone().into_raw();
+            return S_FALSE;
+        }
+    }
     let ok = format_ok(req);
     log(&format!("{which} {:?} ok={ok}", format_info(req)));
     if ok {
@@ -436,11 +457,11 @@ unsafe fn check_format(which: &str, requested: *mut c_void, out: *mut *mut c_voi
         APOERR_FORMAT_NOT_SUPPORTED
     }
 }
-unsafe extern "system" fn apo_input_fmt(_: *mut c_void, _opp: *mut c_void, req: *mut c_void, out: *mut *mut c_void) -> HRESULT {
-    check_format("IsInputFormatSupported", req, out)
+unsafe extern "system" fn apo_input_fmt(_: *mut c_void, opp: *mut c_void, req: *mut c_void, out: *mut *mut c_void) -> HRESULT {
+    check_format("IsInputFormatSupported", opp, req, out)
 }
-unsafe extern "system" fn apo_output_fmt(_: *mut c_void, _opp: *mut c_void, req: *mut c_void, out: *mut *mut c_void) -> HRESULT {
-    check_format("IsOutputFormatSupported", req, out)
+unsafe extern "system" fn apo_output_fmt(_: *mut c_void, opp: *mut c_void, req: *mut c_void, out: *mut *mut c_void) -> HRESULT {
+    check_format("IsOutputFormatSupported", opp, req, out)
 }
 unsafe extern "system" fn apo_channels(_: *mut c_void, out: *mut u32) -> HRESULT {
     if out.is_null() {
