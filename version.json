@@ -1,4 +1,4 @@
 {
-  "version": "0.6.4",
-  "notes": "Microfone: correção da voz robótica (o motor reaproveitava blocos atrasados e esticava a voz ao converter para mono), jogos que pedem o microfone em mono voltam a funcionar (ex.: R.E.P.O.), conversão de canais com a mistura padrão do Windows, Fluxo do microfone chega a todos os programas e mostra os níveis. Instalar o motor religa as melhorias de áudio do Windows. Diagnóstico com teste do microfone. Depois de atualizar, clique em \"Atualizar o motor\" e reabra os jogos."
+  "version": "0.6.5",
+  "notes": "Som de programa misturado no Fluxo (ex.: Firefox no microfone) não picota mais: reserva de 40 ms e correção de ritmo entre os relógios do programa e do dispositivo."
 }
