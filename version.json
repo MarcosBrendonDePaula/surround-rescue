@@ -1,4 +1,4 @@
 {
-  "version": "0.6.3",
-  "notes": "Correção: em fones e placas que usam o esquema de efeitos SFX/MFX/EFX (muitos fones USB e saídas HDMI) o Windows nunca carregava o motor na saída. Depois de atualizar, clique em \"Atualizar o motor\": ele vai para a posição certa sozinho. O modo automático agora prefere o dispositivo padrão do Windows. Relatar problema leva o mapa completo dos dispositivos (copiado para colar na issue)."
+  "version": "0.6.4",
+  "notes": "Microfone: correção da voz robótica (o motor reaproveitava blocos atrasados e esticava a voz ao converter para mono), jogos que pedem o microfone em mono voltam a funcionar (ex.: R.E.P.O.), conversão de canais com a mistura padrão do Windows, Fluxo do microfone chega a todos os programas e mostra os níveis. Instalar o motor religa as melhorias de áudio do Windows. Diagnóstico com teste do microfone. Depois de atualizar, clique em \"Atualizar o motor\" e reabra os jogos."
 }
