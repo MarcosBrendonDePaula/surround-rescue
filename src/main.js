@@ -409,6 +409,12 @@ function dgBind() {
     DG.sort((a, b) => ({ fail: 0, warn: 1, ok: 2 })[a.level] - ({ fail: 0, warn: 1, ok: 2 })[b.level]);
     dgRender(DG); $("#dg-run").disabled = false;
   });
+  $("#dg-mic").addEventListener("click", async () => {
+    const b = $("#dg-mic"); b.disabled = true; const t = b.textContent; b.textContent = "Fale agora… (3 s)";
+    let r;
+    try { r = await invoke("diagnose_mic_test", { lang: window.srLang || "pt" }); } catch (e) { r = { level: "fail", title: String(e), detail: "", fix: "" }; }
+    dgRender([r, ...DG]); b.textContent = t; b.disabled = false;
+  });
   $("#dg-test").addEventListener("click", async () => {
     const b = $("#dg-test"); b.disabled = true; const t = b.textContent; b.textContent = "Tocando um tom de 2 s…";
     let r;

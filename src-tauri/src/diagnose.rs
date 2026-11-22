@@ -236,6 +236,36 @@ pub fn run_checks(own_engine: bool, out_choice: Option<&str>, in_choice: Option<
     v
 }
 
+/// Teste do microfone: grava 3 s pelo caminho normal do Windows (o mesmo dos jogos e do Discord) e
+/// diz se chega som, com que volume e se o motor processou.
+pub fn mic_test(device: &str, lang: &str) -> Check {
+    let en = lang == "en";
+    let before = engine_status(device).map(|s| s.1).unwrap_or(0);
+    let r = sr_host::diag::record_level(device, 3.0);
+    std::thread::sleep(std::time::Duration::from_millis(2200));
+    let engine = match engine_status(device) {
+        Some((_, b, _)) if b > before => tr(en, "passou pelo motor", "went through the engine"),
+        Some(_) => tr(en, "não passou pelo motor", "did not go through the engine"),
+        None => tr(en, "sem o motor neste microfone", "no engine on this microphone"),
+    };
+    match r {
+        Err(e) => ck("fail", tr(en, "Não deu para abrir o microfone", "Couldn't open the microphone"), e,
+            tr(en, "Outro programa pode estar usando o microfone em modo exclusivo, ou ele está desativado no Windows. Feche os programas de voz e confira em Configurações do Windows → Som → Entrada.",
+               "Another program may be using the microphone exclusively, or it is disabled in Windows. Close voice programs and check Windows Settings → Sound → Input.")),
+        Ok((rate, ch, _, _, zeros)) if zeros > 0.99 => ck("fail", tr(en, "O microfone entrega silêncio absoluto", "The microphone delivers absolute silence"),
+            format!("{rate} Hz, {ch} {} · {engine}", tr(en, "canais", "channels")),
+            tr(en, "Confira o botão de mudo do fone, o volume de entrada em Configurações do Windows → Som → Entrada e a privacidade do microfone.",
+               "Check the headset mute button, the input volume in Windows Settings → Sound → Input and microphone privacy.")),
+        Ok((rate, ch, peak, avg, _)) if peak < -50.0 => ck("warn", tr(en, "O microfone está quase sem som", "The microphone is almost silent"),
+            format!("{} {peak:.0} dB, {} {avg:.0} dB · {rate} Hz, {ch} {} · {engine}", tr(en, "pico", "peak"), tr(en, "média", "average"), tr(en, "canais", "channels")),
+            tr(en, "Fale durante o teste. Se falou, aumente o volume de entrada do microfone no Windows.", "Speak during the test. If you did, raise the microphone input volume in Windows.")),
+        Ok((rate, ch, peak, avg, _)) => ck("ok", tr(en, "O microfone está entregando som", "The microphone is delivering sound"),
+            format!("{} {peak:.0} dB, {} {avg:.0} dB · {rate} Hz, {ch} {} · {engine}", tr(en, "pico", "peak"), tr(en, "média", "average"), tr(en, "canais", "channels")),
+            tr(en, "Se um jogo não ouve você, o problema está na configuração de voz dele: escolha este microfone (ou \"Padrão\") lá e abra o jogo de novo.",
+               "If a game can't hear you, the problem is in its voice settings: pick this microphone (or \"Default\") there and restart the game.")),
+    }
+}
+
 /// Teste ativo: toca 2 s de um tom baixo na saída e confere se o contador do motor subiu.
 pub fn active_test(device: &str, lang: &str) -> Check {
     let en = lang == "en";
@@ -410,4 +440,16 @@ pub fn device_map() -> String {
         }
     }
     s
+}
+
+#[cfg(test)]
+mod teste_mic {
+    /// Grava 3 s do microfone escolhido automaticamente (cargo test -- --ignored --nocapture roda_teste_mic)
+    #[test]
+    #[ignore]
+    fn roda_teste_mic() {
+        let d = crate::system::pick(&crate::devices::list("Capture"), None).unwrap();
+        let c = super::mic_test(&d.id, "pt");
+        println!("[{}] {} | {} | {}", c.level, c.title, c.detail, c.fix);
+    }
 }
