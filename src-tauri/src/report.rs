@@ -182,6 +182,14 @@ pub fn body(app_version: &str, own_engine: bool, host_running: bool, lines: usiz
     if !stats.trim().is_empty() {
         b.push_str(&format!("\n<details><summary>{}</summary>\n\n```json\n{}\n```\n</details>\n", tr(en, "Medições do executor", "Host measurements"), stats.trim()));
     }
+    // mapa de cada dispositivo: com ele dá para tratar um caso novo de driver sem pedir mais nada
+    b.push_str(&format!("
+<details><summary>{}</summary>
+
+```
+{}```
+</details>
+", tr(en, "Mapa dos dispositivos (efeitos e modos do driver)", "Device map (driver effects and modes)"), crate::diagnose::device_map()));
     // os logs em si ficam como o programa escreveu (é o que o desenvolvedor procura)
     let host_log = hide_flow_names(&tail(&data().join("host-log.txt"), lines));
     let apo_log = tail(&data().join(r"engine\apo-log.txt"), lines);
@@ -190,18 +198,68 @@ pub fn body(app_version: &str, own_engine: bool, host_running: bool, lines: usiz
     redact(&b)
 }
 
+/// Copia um texto para a área de transferência do Windows (via PowerShell, sem janela).
+fn copy_to_clipboard(text: &str) -> bool {
+    use std::os::windows::process::CommandExt;
+    let f = std::env::temp_dir().join("surround-rescue-relatorio.txt");
+    if std::fs::write(&f, text.as_bytes()).is_err() {
+        return false;
+    }
+    let cmd = format!("Get-Content -Raw -Encoding UTF8 -LiteralPath '{}' | Set-Clipboard", f.display());
+    std::process::Command::new("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-Command", &cmd])
+        .creation_flags(0x0800_0000)
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
 /// Abre a página de issue nova já preenchida. Logs longos são encurtados para caber no link.
 pub fn open(app_version: &str, own_engine: bool, host_running: bool, lang: &str, checks: &[crate::diagnose::Check]) -> Result<(), String> {
     let title = format!("[{app_version}] ");
     let base = format!("https://github.com/{}/issues/new?title={}&body=", crate::update::REPO, enc(&title));
-    // menos linhas de log até o link caber
-    let mut lines = 30;
-    let url = loop {
-        let u = format!("{base}{}", enc(&body(app_version, own_engine, host_running, lines, lang, checks)));
-        if u.len() <= MAX_URL || lines <= 2 {
-            break u;
+    // o relatório completo vai sempre para a área de transferência (o link do GitHub tem limite de tamanho)
+    let full = body(app_version, own_engine, host_running, 80, lang, checks);
+    let copied = copy_to_clipboard(&full);
+    let url = {
+        let u = format!("{base}{}", enc(&full));
+        if u.len() <= MAX_URL {
+            u
+        } else {
+            // não cabe: o link leva o resumo (execução + diagnóstico) e pede para colar o resto
+            let en = lang == "en";
+            let cut = full.find("
+<details>").unwrap_or(full.len());
+            let note = if copied {
+                tr(en, "
+
+**O relatório completo (mapa dos dispositivos e logs) foi copiado. Cole aqui embaixo com Ctrl+V.**
+
+",
+                    "
+
+**The full report (device map and logs) was copied. Paste it below with Ctrl+V.**
+
+")
+            } else {
+                tr(en, "
+
+(O relatório completo não coube no link.)
+", "
+
+(The full report did not fit in the link.)
+")
+            };
+            let mut short = format!("{}{note}", &full[..cut]);
+            while format!("{base}{}", enc(&short)).len() > MAX_URL && short.len() > 500 {
+                let mut n = short.len() * 9 / 10;
+                while !short.is_char_boundary(n) {
+                    n -= 1;
+                }
+                short.truncate(n);
+            }
+            format!("{base}{}", enc(&short))
         }
-        lines = lines * 2 / 3;
     };
     use std::os::windows::process::CommandExt;
     std::process::Command::new("rundll32")
