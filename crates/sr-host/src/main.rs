@@ -303,7 +303,12 @@ fn audio_thread(ch: Arc<sr_ipc::Channel>, slot: Slot, stop: Arc<AtomicBool>, tim
                 chain = Some(c);
             }
         }
-        ch.heartbeat();
+        // só se apresenta ao motor quando há o que fazer: cadeia que muda o som ou som mandado para este
+        // microfone. Sem isso o motor nem manda o áudio (nada de atraso nem risco de falha no caminho).
+        let needed = chain.as_ref().map(|c| c.changes_audio()).unwrap_or(false) || bus::targets().contains(&endpoint.to_lowercase());
+        if needed {
+            ch.heartbeat();
+        }
         ch.serve(50, |audio, sr, chs| {
             if let Some(c) = chain.as_mut().filter(|c| c.sample_rate() == sr as f64) {
                 let frames = audio.len() / (chs as usize).max(1);

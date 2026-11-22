@@ -470,6 +470,23 @@ impl AudioChain {
         self.sample_rate
     }
 
+    /// A cadeia muda o som? Falso quando é só entrada → saída (volume 1, sem pan, mudo ou solo), sem
+    /// plugins, efeitos, entradas extras nem envios: aí nem vale a viagem do áudio até o executor.
+    pub fn changes_audio(&self) -> bool {
+        let Some(p) = &self.plan else { return false };
+        if self.procs.plugins.iter().any(|x| x.is_some())
+            || self.procs.blocks.iter().any(|x| x.is_some())
+            || self.procs.sources.iter().any(|x| x.is_some())
+            || !self.sends.is_empty()
+        {
+            return true;
+        }
+        // só a caixa de saída, alimentada só pela entrada, com ganho 1 nos dois lados
+        let simple = p.order.iter().all(|&n| n == p.output)
+            && p.inputs.get(p.output).map(|v| v.len() == 1 && v[0].0 == p.input && v[0].1 == 1.0 && v[0].2 == 1.0).unwrap_or(false);
+        !simple
+    }
+
     /// Onde o controle entrega mudanças leves para esta cadeia.
     pub fn updates(&self) -> UpdateSlot {
         self.updates.clone()
