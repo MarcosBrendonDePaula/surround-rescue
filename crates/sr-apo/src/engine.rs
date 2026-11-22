@@ -2,7 +2,7 @@
 
 use crate::config::{self, EngineConfig};
 use sr_dsp::{MicProcessor, Processor};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
@@ -13,6 +13,8 @@ struct Mailbox {
     /// Canal com o executor de VST, aberto pela thread comum quando o executor aparece
     host: Mutex<Option<sr_ipc::Channel>>,
     stop: AtomicBool,
+    /// Blocos de áudio processados (diagnóstico: prova de que o som está passando pelo motor)
+    blocks: AtomicU64,
 }
 
 pub struct Engine {
@@ -52,7 +54,8 @@ impl Engine {
             if let Some(c) = std::fs::read_to_string(&path).ok().and_then(|t| config::parse(&t)) {
                 e.apply(&c);
             }
-            std::thread::spawn(move || watch(path, ep, box_));
+            let info = format!("pid={} taxa={} canais={}", std::process::id(), sr, channels);
+            std::thread::spawn(move || watch(path, ep, box_, info));
         }
         e
     }
@@ -78,6 +81,7 @@ impl Engine {
 
     /// Tempo real: sem bloqueio (try_lock) e sem alocação.
     pub fn process(&mut self, buf: &mut [f32]) {
+        self.box_.blocks.fetch_add(1, Ordering::Relaxed);
         let next = match self.box_.pending.try_lock() {
             Ok(mut slot) => slot.take(),
             Err(_) => None,
@@ -123,7 +127,9 @@ impl Drop for Engine {
 }
 
 /// Thread comum: confere o arquivo 4x por segundo e manda a configuração nova.
-fn watch(path: std::path::PathBuf, endpoint: String, mb: Arc<Mailbox>) {
+fn watch(path: std::path::PathBuf, endpoint: String, mb: Arc<Mailbox>, info: String) {
+    let status = config::engine_dir().join(format!("status-{}.txt", endpoint.to_lowercase()));
+    let (mut last_blocks, mut tick) = (0u64, 0u32);
     let mut last: Option<SystemTime> = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
     // O APO (serviço) cria o canal; o executor de VST conecta quando quiser.
     // Enquanto não houver executor vivo, o tempo real nem espera (batimento ausente).
@@ -136,6 +142,17 @@ fn watch(path: std::path::PathBuf, endpoint: String, mb: Arc<Mailbox>) {
     }
     while !mb.stop.load(Ordering::SeqCst) {
         std::thread::sleep(Duration::from_millis(250));
+        // a cada 2 s, se passou som: o app (diagnóstico) vê que o motor está processando agora
+        tick += 1;
+        if tick % 8 == 0 {
+            let b = mb.blocks.load(Ordering::Relaxed);
+            if b != last_blocks {
+                last_blocks = b;
+                let ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0);
+                let _ = std::fs::write(&status, format!("carregado {info} blocos={b} em={ms}
+"));
+            }
+        }
         let now = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
         if now != last {
             last = now;

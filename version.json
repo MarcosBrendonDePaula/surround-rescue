@@ -1,4 +1,4 @@
 {
-  "version": "0.6.1",
-  "notes": "Estilo de surround Razer (medido no motor Nahimic) como padrão e predefinição de equalizador Razer; som com timbre neutro e graves sem bombear; guia de início; interface nova sem a barra do Windows; mesa de som com entrada e saída em estéreo; traduções (português e inglês); botão Relatar problema; aviso para atualizar o motor depois de atualizar o app; correção: num PC só com o motor próprio o app não aplicava os ajustes."
+  "version": "0.6.2",
+  "notes": "Diagnóstico em Configurações: confere cada ponto do caminho do som (dispositivo padrão do Windows, motor instalado e carregado, melhorias de áudio, programas concorrentes, esquema de efeitos do driver) e testa ao vivo se o som passa pelo motor. O resultado vai junto no Relatar problema. Depois de atualizar, clique em \"Atualizar o motor\"."
 }

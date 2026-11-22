@@ -395,10 +395,33 @@ async function engineCheck() {
   };
 }
 
+// ---------- diagnóstico ----------
+function dgRender(list) {
+  $("#dg-list").innerHTML = list.map((c) => `<li class="dg-${c.level}"><span class="dg-ic">${c.level === "ok" ? "✓" : c.level === "warn" ? "!" : "✕"}</span>
+    <div><b>${esc(c.title)}</b>${c.detail ? `<small>${esc(c.detail)}</small>` : ""}${c.fix ? `<p>${esc(c.fix)}</p>` : ""}</div></li>`).join("");
+}
+let DG = [];
+function dgBind() {
+  if (!$("#dg-run")) return;
+  $("#dg-run").addEventListener("click", async () => {
+    $("#dg-run").disabled = true; $("#dg-list").innerHTML = `<li class="dg-ok"><span class="dg-ic">…</span><div>${esc("Verificando…")}</div></li>`;
+    try { DG = await invoke("run_diagnostics", { lang: window.srLang || "pt" }); } catch (e) { DG = [{ level: "fail", title: String(e), detail: "", fix: "" }]; }
+    DG.sort((a, b) => ({ fail: 0, warn: 1, ok: 2 })[a.level] - ({ fail: 0, warn: 1, ok: 2 })[b.level]);
+    dgRender(DG); $("#dg-run").disabled = false;
+  });
+  $("#dg-test").addEventListener("click", async () => {
+    const b = $("#dg-test"); b.disabled = true; const t = b.textContent; b.textContent = "Tocando um tom de 2 s…";
+    let r;
+    try { r = await invoke("diagnose_test", { lang: window.srLang || "pt" }); } catch (e) { r = { level: "fail", title: String(e), detail: "", fix: "" }; }
+    dgRender([r, ...DG]); b.textContent = t; b.disabled = false;
+  });
+}
+
 async function init() {
   snap = await invoke("get_snapshot");
   try { winBind(); } catch (e) { console.warn(e); }
   engineCheck();
+  dgBind();
   bind();
   render();
   refreshStatus();
